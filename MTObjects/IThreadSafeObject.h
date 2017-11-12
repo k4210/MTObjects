@@ -19,6 +19,7 @@ private:
 public:
 	virtual void IsDependentOn(vector<IThreadSafeObject*>& ref_dependencies) const = 0;
 	virtual void IsConstDependentOn(vector<const IThreadSafeObject*>& ref_dependencies) const = 0;
+	virtual int GetIndex() const = 0;
 };
 
 struct Cluster
@@ -48,38 +49,6 @@ struct Cluster
 
 private:
 
-	void GatherObjects(IThreadSafeObject* in_obj, unordered_set<IThreadSafeObject*>& all_objects, unordered_set<Cluster*> clusters_to_merge, vector<IThreadSafeObject*>& objects_to_handle)
-	{
-		objects_to_handle.clear();
-		objects_to_handle.push_back(in_obj);
-
-		while (!objects_to_handle.empty())
-		{
-			IThreadSafeObject* obj = objects_to_handle.back();
-			objects_to_handle.pop_back();
-
-			assert(obj);
-			auto iter_all = all_objects.find(obj);
-			const bool not_yet_in_cluster = iter_all != all_objects.end();
-			assert(not_yet_in_cluster || obj->cluster_);
-
-			if (not_yet_in_cluster)
-			{
-				objects_.emplace_back(obj);
-				assert(nullptr == obj->cluster_);
-				obj->cluster_ = this;
-				all_objects.erase(iter_all);
-
-				obj->IsConstDependentOn(const_dependencies_);
-				obj->IsDependentOn(objects_to_handle);
-			}
-			else if (obj->cluster_ != this)
-			{
-				clusters_to_merge.emplace(obj->cluster_);
-			}
-		}
-	}
-
 	void MergeTo(Cluster& main_cluster)
 	{
 		for (auto obj : objects_)
@@ -92,7 +61,7 @@ private:
 		//At this stage const_dependencies_clusters_ are not generated yet
 	}
 
-	static void ClearClustersInObjects(const unordered_set<IThreadSafeObject*>& all_objects)
+	static void ClearClustersInObjects(const vector<IThreadSafeObject*>& all_objects)
 	{
 		for (auto obj : all_objects)
 		{
@@ -112,20 +81,55 @@ private:
 		clusters.pop_back();
 	}
 
-	static void CreateClusters(unordered_set<IThreadSafeObject *> &all_objects, vector<Cluster*> &clusters, vector<Cluster>& preallocated_clusters)
+	void GatherObjects(IThreadSafeObject* in_obj, vector<IThreadSafeObject*>& remaining_objects_table, int& object_counter, unordered_set<Cluster*>& clusters_to_merge, vector<IThreadSafeObject*>& objects_to_handle)
+	{
+		objects_to_handle.clear();
+		objects_to_handle.push_back(in_obj);
+
+		while (!objects_to_handle.empty())
+		{
+			IThreadSafeObject* obj = objects_to_handle.back();
+			objects_to_handle.pop_back();
+
+			assert(obj);
+			const int obj_index = obj->GetIndex();
+			const bool not_yet_in_cluster = nullptr != remaining_objects_table[obj_index];
+			assert(not_yet_in_cluster || obj->cluster_);
+
+			if (not_yet_in_cluster)
+			{
+				assert(nullptr == obj->cluster_);
+
+				objects_.emplace_back(obj);
+				obj->cluster_ = this;
+				obj->IsConstDependentOn(const_dependencies_);
+				obj->IsDependentOn(objects_to_handle);
+
+				remaining_objects_table[obj_index] = nullptr;
+				object_counter--;
+			}
+			else if (obj->cluster_ != this)
+			{
+				clusters_to_merge.emplace(obj->cluster_);
+			}
+		}
+	}
+
+	static void CreateClusters(vector<IThreadSafeObject *> &all_objects, vector<Cluster*> &clusters, vector<Cluster>& preallocated_clusters)
 	{
 		unordered_set<Cluster*> clusters_to_merge;
-		clusters_to_merge.reserve(clusters.size());
-
+		clusters_to_merge.reserve(128);
 		vector<IThreadSafeObject*> objects_buff;
 		objects_buff.reserve(128);
-
+		int objects_counter = all_objects.size();
 		unsigned int cluster_counter = 0;
-		while (!all_objects.empty())
+		int first_remaining_obj_index = -1;
+		while (objects_counter > 0)
 		{
 			assert(cluster_counter < preallocated_clusters.size());
 			Cluster* cluster = &preallocated_clusters[cluster_counter];
-			cluster->GatherObjects(*all_objects.begin(), all_objects, clusters_to_merge, objects_buff);
+			do { first_remaining_obj_index++; } while (nullptr == all_objects[first_remaining_obj_index]);
+			cluster->GatherObjects(all_objects[first_remaining_obj_index], all_objects, objects_counter, clusters_to_merge, objects_buff);
 			if (clusters_to_merge.empty())
 			{
 				cluster->index = clusters.size();
@@ -136,10 +140,8 @@ private:
 			{
 				Cluster* main_cluster = *clusters_to_merge.begin();
 				clusters_to_merge.erase(clusters_to_merge.begin());
-
 				cluster->MergeTo(*main_cluster);
 				cluster->Reset();
-
 				for (auto other_cluster : clusters_to_merge)
 				{
 					other_cluster->MergeTo(*main_cluster);
@@ -174,7 +176,7 @@ private:
 
 public:
 
-	static vector<Cluster*> GenerateClusters(unordered_set<IThreadSafeObject*> all_objects, vector<Cluster>& preallocated_clusters)
+	static vector<Cluster*> GenerateClusters(vector<IThreadSafeObject*>& all_objects, vector<Cluster>& preallocated_clusters)
 	{
 		ClearClustersInObjects(all_objects);
 

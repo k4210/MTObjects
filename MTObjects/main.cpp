@@ -16,6 +16,8 @@ public:
 
 	int id_ = -1;
 
+	int GetIndex() const override { return id_; }
+
 	void IsDependentOn(vector<IThreadSafeObject*>& ref_dependencies) const override
 	{
 		ref_dependencies.insert(ref_dependencies.end(), dependencies_.begin(), dependencies_.end());
@@ -70,21 +72,21 @@ static void Test(int num_objects, int forced_clusters_num, int dependencies_num,
 
 	std::cout << "Test was generated.  " << std::endl;
 
-	unordered_set<IThreadSafeObject*> all_objects;
+	vector<IThreadSafeObject*> all_objects;
 	all_objects.reserve(num_objects);
 	for (int i = 0; i < num_objects; i++)
 	{
-		all_objects.emplace(&vec_obj[i]);
+		all_objects.emplace_back(&vec_obj[i]);
 	}
 
-	vector<Cluster> preallocated_clusters(all_objects.size() / 3);
+	vector<Cluster> preallocated_clusters(all_objects.size() / 2);
 
 	std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
 	const vector<Cluster*> clusters = Cluster::GenerateClusters(all_objects, preallocated_clusters);
 	std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
 	std::cout << "GenerateClusters [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_1 - time_0).count() << std::endl;
 	std::cout << "clusters: " << clusters.size() << std::endl;
-	/*
+
 	std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
 	const vector<GroupOfConcurrentClusters> groups = GroupOfConcurrentClusters::GenerateClusterGroups(clusters);
 	std::chrono::system_clock::time_point time_3 = std::chrono::system_clock::now();
@@ -108,14 +110,14 @@ static void Test(int num_objects, int forced_clusters_num, int dependencies_num,
 		}
 		std::cout << std::endl;
 	}
-	*/
+
 	std::cout << std::endl;
 }
 
 void main()
 {
-	int num_objects = 1024 * 1024;
-	int forced_clusters = 256;
+	int num_objects = 1024 *1024;
+	int forced_clusters = 1024;
 	int dependencies_num = 4;
 	int const_dependencies_num = 1;
 	const bool read_user_input = false;
