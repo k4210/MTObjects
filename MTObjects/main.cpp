@@ -21,9 +21,9 @@ public:
 		ref_dependencies.insert(ref_dependencies.end(), dependencies_.begin(), dependencies_.end());
 	}
 
-	void IsConstDependentOn(unordered_set<const	IThreadSafeObject*>& ref_dependencies) const
+	void IsConstDependentOn(vector<const IThreadSafeObject*>& ref_dependencies) const
 	{
-		ref_dependencies.insert(const_dependencies_.begin(), const_dependencies_.end());
+		ref_dependencies.insert(ref_dependencies.end(), const_dependencies_.begin(), const_dependencies_.end());
 	}
 
 	void Task()
@@ -77,19 +77,20 @@ static void Test(int num_objects, int forced_clusters_num, int dependencies_num,
 		all_objects.emplace(&vec_obj[i]);
 	}
 
+	vector<Cluster> preallocated_clusters(all_objects.size() / 3);
+
 	std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
-	const unordered_set<shared_ptr<Cluster>> clusters = Cluster::GenerateClusters(all_objects);
+	const vector<Cluster*> clusters = Cluster::GenerateClusters(all_objects, preallocated_clusters);
 	std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
 	std::cout << "GenerateClusters [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_1 - time_0).count() << std::endl;
-
+	std::cout << "clusters: " << clusters.size() << std::endl;
+	/*
 	std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
 	const vector<GroupOfConcurrentClusters> groups = GroupOfConcurrentClusters::GenerateClusterGroups(clusters);
 	std::chrono::system_clock::time_point time_3 = std::chrono::system_clock::now();
 	std::cout << "GenerateClusterGroups [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_3 - time_2).count() << std::endl;
-
-	std::cout << "clusters: " << clusters.size() << std::endl;
 	std::cout << "groups: " << groups.size() << std::endl;
-	/*
+
 	for (unsigned int group_idx = 0; group_idx < groups.size(); group_idx++)
 	{
 		const GroupOfConcurrentClusters& group = groups[group_idx];
@@ -114,7 +115,7 @@ static void Test(int num_objects, int forced_clusters_num, int dependencies_num,
 void main()
 {
 	int num_objects = 1024 * 1024;
-	int forced_clusters = 1024;
+	int forced_clusters = 256;
 	int dependencies_num = 4;
 	int const_dependencies_num = 1;
 	const bool read_user_input = false;
