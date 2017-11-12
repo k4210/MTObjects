@@ -129,7 +129,7 @@ private:
 	}
 
 public:
-	static unordered_set<shared_ptr<Cluster>> GenerateClasters(unordered_set<IThreadSafeObject*> all_objects)
+	static unordered_set<shared_ptr<Cluster>> GenerateClusters(unordered_set<IThreadSafeObject*> all_objects)
 	{
 		ClearClustersInObjects(all_objects);
 
@@ -144,7 +144,13 @@ struct GroupOfConcurrentClusters : public vector<Cluster*>
 {
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
-	static vector<GroupOfConcurrentClusters> GenerateClasterGroups(const unordered_set<shared_ptr<Cluster>>& clusters)
+	void AddCluster(Cluster& cluster)
+	{
+		emplace_back(&cluster);
+		const_dependencies_clusters_.insert(cluster.const_dependencies_clusters_.begin(), cluster.const_dependencies_clusters_.end());
+	}
+
+	static vector<GroupOfConcurrentClusters> GenerateClusterGroups(const unordered_set<shared_ptr<Cluster>>& clusters)
 	{
 		auto depends_on = [](const Cluster* a, const Cluster* b) -> bool
 		{
@@ -153,37 +159,43 @@ struct GroupOfConcurrentClusters : public vector<Cluster*>
 
 		auto fits_into_group = [&](const GroupOfConcurrentClusters& group, const Cluster* cluster) -> bool
 		{
-
 			return std::none_of(group.begin(), group.end(), [&](const Cluster* cluster_in_group)
 			{
 				return depends_on(cluster, cluster_in_group);
 			}) 
+
 			&& group.const_dependencies_clusters_.find(cluster) == group.const_dependencies_clusters_.end();
 		};
 
 		vector<GroupOfConcurrentClusters> groups;
 		groups.reserve(clusters.size());
+		groups.resize(std::max<int>(1, clusters.size() / 32));
+		int cluster_index = 0;
 		for (auto& cluster_sp : clusters)
 		{
 			auto cluster = cluster_sp.get();
 			bool fits_in_existing_group = false;
-			for (auto& group : groups)
 			{
-				if (fits_into_group(group, cluster))
+				const int group_num = groups.size();
+				const int first_group_to_try = cluster_index % group_num;
+				for (int groups_checked = 0; groups_checked < group_num && !fits_in_existing_group; groups_checked++)
 				{
-					group.emplace_back(cluster);
-					group.const_dependencies_clusters_.insert(cluster->const_dependencies_clusters_.begin(), cluster->const_dependencies_clusters_.end());
-					fits_in_existing_group = true;
-					break;
+					const int group_idx = (first_group_to_try + groups_checked) % group_num;
+					auto& group = groups[group_idx];
+					if (fits_into_group(group, cluster))
+					{
+						group.AddCluster(*cluster);
+						fits_in_existing_group = true;
+					}
 				}
 			}
 			if (!fits_in_existing_group)
 			{
 				GroupOfConcurrentClusters new_group;
-				new_group.emplace_back(cluster);
-				new_group.const_dependencies_clusters_.insert(cluster->const_dependencies_clusters_.begin(), cluster->const_dependencies_clusters_.end());
+				new_group.AddCluster(*cluster);
 				groups.emplace_back(new_group);
 			}
+			cluster_index++;
 		}
 		return groups;
 	}

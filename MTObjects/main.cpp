@@ -32,42 +32,60 @@ public:
 	}
 };
 
-static void Test(int num_objects, int dependencies_num, int const_dependencies_num)
+static void Test(int num_objects, int forced_clusters_num, int dependencies_num, int const_dependencies_num)
 {
-	std::default_random_engine generator;
-	std::uniform_int_distribution<int> distribution(0, num_objects - 1);
-
-	vector<TestObject> vec_obj;
-	vec_obj.resize(num_objects);
-	TestObject* obj = &vec_obj[0];
-	for (int i = 0; i < num_objects; i++)
+	vector<TestObject> vec_obj(num_objects);
 	{
-		obj[i].id_ = i;
-		for (int j = 0; j < dependencies_num; j++)
+		vector<vector<TestObject*>> forced_clusters(forced_clusters_num);
+		std::default_random_engine generator;
+		std::uniform_int_distribution<int> cluster_distribution(0, forced_clusters_num - 1);
+
+		std::uniform_int_distribution<int> const_dependency_distribution(0, num_objects - 1);
+
+		for (int i = 0; i < num_objects; i++)
 		{
-			obj[i].dependencies_.emplace_back(obj + distribution(generator));
-		}
-		for (int j = 0; j < const_dependencies_num; j++)
-		{
-			obj[i].const_dependencies_.emplace_back(obj + distribution(generator));
+			TestObject& obj = vec_obj[i];
+			obj.id_ = i;
+			const int forced_cluster_idx = cluster_distribution(generator);
+			vector<TestObject*>& cluster = forced_clusters[forced_cluster_idx];
+			const int actual_dependency_num = std::min<int>(dependencies_num, cluster.size());
+			if (actual_dependency_num > 0)
+			{
+				std::uniform_int_distribution<int> dependency_distribution(0, cluster.size() - 1);
+				for (int j = 0; j < dependencies_num; j++)
+				{
+					auto dep_obj = cluster[dependency_distribution(generator)];
+					obj.dependencies_.emplace_back(dep_obj);
+				}
+			}
+			cluster.push_back(&obj);
+
+			for (int j = 0; j < const_dependencies_num; j++)
+			{
+				auto const_dep_obj = &vec_obj[const_dependency_distribution(generator)];
+				obj.const_dependencies_.emplace_back(const_dep_obj);
+			}
 		}
 	}
+
+	std::cout << "Test was generated.  " << std::endl;
 
 	unordered_set<IThreadSafeObject*> all_objects;
 	all_objects.reserve(num_objects);
 	for (int i = 0; i < num_objects; i++)
 	{
-		all_objects.emplace(obj + i);
+		all_objects.emplace(&vec_obj[i]);
 	}
 
 	std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
-	const unordered_set<shared_ptr<Cluster>> clusters = Cluster::GenerateClasters(all_objects);
+	const unordered_set<shared_ptr<Cluster>> clusters = Cluster::GenerateClusters(all_objects);
 	std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
-	const vector<GroupOfConcurrentClusters> groups = GroupOfConcurrentClusters::GenerateClasterGroups(clusters);
-	std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
+	std::cout << "GenerateClusters [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_1 - time_0).count() << std::endl;
 
-	std::cout << "GenerateClasters [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_1 - time_0).count() << std::endl;
-	std::cout << "GenerateClasterGroups [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_2 - time_1).count() << std::endl;
+	std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
+	const vector<GroupOfConcurrentClusters> groups = GroupOfConcurrentClusters::GenerateClusterGroups(clusters);
+	std::chrono::system_clock::time_point time_3 = std::chrono::system_clock::now();
+	std::cout << "GenerateClusterGroups [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_3 - time_2).count() << std::endl;
 
 	std::cout << "clusters: " << clusters.size() << std::endl;
 	std::cout << "groups: " << groups.size() << std::endl;
@@ -76,12 +94,16 @@ static void Test(int num_objects, int dependencies_num, int const_dependencies_n
 	{
 		const GroupOfConcurrentClusters& group = groups[group_idx];
 		std::cout << group_idx << "[" << group.size() << "]\t ";
-		for (unsigned int cluster_idx = 0; cluster_idx < group.size(); cluster_idx++)
+		const bool print_inside_group = false;
+		if (print_inside_group)
 		{
-			auto& cluster = group[cluster_idx];
-			std::cout << cluster->objects_.size()
-				//<< "(" << cluster->const_dependencies_clusters_.size() << ")"
-				<< " ";
+			for (unsigned int cluster_idx = 0; cluster_idx < group.size(); cluster_idx++)
+			{
+				auto& cluster = group[cluster_idx];
+				std::cout << cluster->objects_.size()
+					//<< "(" << cluster->const_dependencies_clusters_.size() << ")"
+					<< " ";
+			}
 		}
 		std::cout << std::endl;
 	}
@@ -91,22 +113,34 @@ static void Test(int num_objects, int dependencies_num, int const_dependencies_n
 
 void main()
 {
-	std::cout << "num_objects: ";
-	int num_objects = 2048;
-	std::cin >> num_objects; 
-
-	std::cout << "dependencies_num: ";
-	int dependencies_num = 3;
-	std::cin >> dependencies_num;
-
-	std::cout << "const_dependencies_num: ";
-	int const_dependencies_num = 3;
-	std::cin >> const_dependencies_num;
+	int num_objects = 1024 * 1024;
+	int forced_clusters = 1024;
+	int dependencies_num = 4;
+	int const_dependencies_num = 1;
+	const bool read_user_input = false;
+	if (read_user_input)
+	{
+		std::cout << "num_objects: ";
+		std::cin >> num_objects;
+		std::cout << "forced_clusters: ";
+		std::cin >> forced_clusters;
+		std::cout << "dependencies_num: ";
+		std::cin >> dependencies_num;
+		std::cout << "const_dependencies_num: ";
+		std::cin >> const_dependencies_num;
+	}
+	else
+	{
+		std::cout << "num_objects: " << num_objects << std::endl;
+		std::cout << "forced_clusters: " << forced_clusters << std::endl;
+		std::cout << "dependencies_num: " << dependencies_num << std::endl;
+		std::cout << "const_dependencies_num: " << const_dependencies_num << std::endl;
+	}
 	std::cout << std::endl;
 	
 	for (int i = 0; i < 16; i++)
 	{
-		Test(num_objects, dependencies_num, const_dependencies_num);
+		Test(num_objects, forced_clusters, dependencies_num, const_dependencies_num);
 	}
 	
 	getchar();
