@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <deque>
+#include <iterator>
 namespace MTObjects
 {
 using std::unordered_set;
@@ -40,9 +41,9 @@ struct Cluster
 
 	Cluster()
 	{
-		objects_.reserve(32);
-		const_dependencies_.reserve(32);
-		const_dependencies_clusters_.reserve(32);
+		objects_.reserve(128);
+		const_dependencies_.reserve(128);
+		const_dependencies_clusters_.reserve(128);
 		Reset();
 	}
 
@@ -130,7 +131,7 @@ private:
 					{
 						redundant_cluster->MergeTo(*main_cluster);
 						RemoveCluster(clusters, redundant_cluster);
-						redundant_cluster->index = -1;
+						redundant_cluster->Reset();
 					}
 				}
 				clusters_to_merge.clear();
@@ -140,25 +141,13 @@ private:
 
 	static void CreateClustersDependencies(const vector<Cluster*>& clusters)
 	{
-		vector < const IThreadSafeObject*> const_dependencies;
-		const_dependencies.reserve(1024);
 		for (auto cluster : clusters)
 		{
-			//Generate cluster dependencies. It can e done, only when all objects have cluster set.
-			for (const IThreadSafeObject* obj : cluster->const_dependencies_)
-			{
-				if (obj->cluster_ != cluster)
-				{
-					cluster->const_dependencies_clusters_.emplace(obj->cluster_);
-				}
-			}
-			//cluster->const_dependencies_.clear();
-			//cluster->const_dependencies_.shrink_to_fit();
-
-			//Remove duplicates:
-			//cluster->unique_objects_.insert(cluster->objects_.begin(), cluster->objects_.end());
-			//cluster->objects_.clear();
-			//cluster->objects_.shrink_to_fit();
+			//Generate cluster dependencies. It can be done, only when all objects have cluster set.
+			std::transform(cluster->const_dependencies_.begin(), cluster->const_dependencies_.end()
+				, std::inserter(cluster->const_dependencies_clusters_, cluster->const_dependencies_clusters_.begin())
+				, [](const IThreadSafeObject* obj) { return obj->cluster_; });
+			cluster->const_dependencies_clusters_.erase(cluster);
 		}
 	}
 
