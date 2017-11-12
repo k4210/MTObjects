@@ -17,9 +17,9 @@ public:
 
 	int id_ = -1;
 
-	void IsDependentOn(vector<IThreadSafeObject*>& ref_dependencies) const override
+	void IsDependentOn(ThreadSafeObjectsArray& ref_dependencies) const override
 	{
-		ref_dependencies.insert(ref_dependencies.end(), dependencies_.begin(), dependencies_.end());
+		ref_dependencies.insert_back(dependencies_.begin(), dependencies_.end());
 	}
 
 	void IsConstDependentOn(vector<const IThreadSafeObject*>& ref_dependencies) const override

@@ -12,6 +12,50 @@ using std::unordered_set;
 using std::vector;
 using std::deque;
 
+template<typename T, unsigned int N> struct SmartArray
+{
+private:
+	unsigned int size_ = 0;
+	T data_[N];
+public:
+	T* begin() { return data_; }
+	T* end() { return data_ + size_; }
+	const T* begin() const { return data_; }
+	const T* end() const { return data_ + size_; }
+
+	unsigned int size() const { return size_; }
+	bool empty() const { return 0 == size_; }
+
+	void pop_back() { assert(size_); size_--; }
+	T& back() { assert(size_); return data_[size_ - 1]; }
+	const T& back() const { assert(size_); return data_[size_ - 1]; }
+
+	void push_back(const T& value) 
+	{ 
+		assert(size_ < N); 
+		data_[size_] = value;
+		size_++;
+	}
+
+	const T& operator[](unsigned int pos) const { return data[pos]; }
+	T& operator[](unsigned int pos) { return data[pos]; }
+
+	template<class Iter>
+	void insert_back(Iter begin, Iter end)
+	{
+		assert(std::distance(begin, end) < static_cast<int>(N - size_));
+		while (begin != end)
+		{
+			data_[size_] = *begin;
+			begin++;
+			size_++;
+		}
+	}
+};
+
+struct IThreadSafeObject;
+typedef SmartArray<IThreadSafeObject*, 512> ThreadSafeObjectsArray;
+
 struct IThreadSafeObject
 {
 private:
@@ -19,7 +63,7 @@ private:
 	Cluster* cluster_ = nullptr;
 
 public:
-	virtual void IsDependentOn(vector<IThreadSafeObject*>& ref_dependencies) const = 0;
+	virtual void IsDependentOn(ThreadSafeObjectsArray& ref_dependencies) const = 0;
 	virtual void IsConstDependentOn(vector<const IThreadSafeObject*>& ref_dependencies) const = 0;
 };
 
@@ -74,9 +118,9 @@ private:
 		clusters.pop_back();
 	}
 
-	void GatherObjects(IThreadSafeObject* in_obj, int& object_counter, vector<Cluster*>& clusters_to_merge, vector<IThreadSafeObject*>& objects_to_handle)
+	void GatherObjects(IThreadSafeObject* in_obj, int& object_counter, vector<Cluster*>& clusters_to_merge)
 	{
-		objects_to_handle.clear();
+		ThreadSafeObjectsArray objects_to_handle;
 		objects_to_handle.push_back(in_obj);
 		while (!objects_to_handle.empty())
 		{
@@ -101,8 +145,6 @@ private:
 	{
 		vector<Cluster*> clusters_to_merge;
 		clusters_to_merge.reserve(128);
-		vector<IThreadSafeObject*> objects_buff;
-		objects_buff.reserve(128);
 		int objects_counter = all_objects.size();
 		unsigned int cluster_counter = 0;
 		int first_remaining_obj_index = -1;
@@ -111,7 +153,7 @@ private:
 			assert(cluster_counter < preallocated_clusters.size());
 			Cluster* cluster = &preallocated_clusters[cluster_counter];
 			do { first_remaining_obj_index++; } while (nullptr != all_objects[first_remaining_obj_index]->cluster_);
-			cluster->GatherObjects(all_objects[first_remaining_obj_index], objects_counter, clusters_to_merge, objects_buff);
+			cluster->GatherObjects(all_objects[first_remaining_obj_index], objects_counter, clusters_to_merge);
 			if (clusters_to_merge.empty())
 			{
 				cluster->index = clusters.size();
@@ -179,7 +221,7 @@ public:
 			{
 				assert(obj && obj->cluster_ == cluster);
 
-				vector<IThreadSafeObject*> dependencies;
+				ThreadSafeObjectsArray dependencies;
 				obj->IsDependentOn(dependencies);
 				for (auto dep : dependencies)
 				{
