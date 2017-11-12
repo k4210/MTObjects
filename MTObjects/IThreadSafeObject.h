@@ -36,9 +36,7 @@ struct Cluster : public std::enable_shared_from_this<Cluster>
 	}
 private:
 
-	void GatherObjects(IThreadSafeObject* obj
-		, unordered_set<IThreadSafeObject*>& all_objects
-		, unordered_set<Cluster*> clusters_to_merge)
+	void GatherObjects(IThreadSafeObject* obj, unordered_set<IThreadSafeObject*>& all_objects, unordered_set<Cluster*> clusters_to_merge)
 	{
 		assert(obj);
 		auto iter_all = all_objects.find(obj);
@@ -89,9 +87,10 @@ private:
 
 	static void CreateClusters(unordered_set<IThreadSafeObject *> &all_objects, unordered_set<shared_ptr<Cluster>> &clusters)
 	{
+		unordered_set<Cluster*> clusters_to_merge;
+		clusters_to_merge.reserve(clusters.size());
 		while (!all_objects.empty())
 		{
-			unordered_set<Cluster*> clusters_to_merge;
 			auto cluster = std::make_shared<Cluster>();
 			cluster->GatherObjects(*all_objects.begin(), all_objects, clusters_to_merge);
 			if (clusters_to_merge.empty())
@@ -102,12 +101,15 @@ private:
 			{
 				Cluster* main_cluster = *clusters_to_merge.begin();
 				clusters_to_merge.erase(clusters_to_merge.begin());
+
 				cluster->MergeTo(*main_cluster);
+
 				for (auto other_cluster : clusters_to_merge)
 				{
 					other_cluster->MergeTo(*main_cluster);
 					clusters.erase(other_cluster->shared_from_this());
 				}
+				clusters_to_merge.clear();
 			}
 		}
 	}
