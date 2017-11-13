@@ -118,7 +118,7 @@ private:
 		clusters.pop_back();
 	}
 
-	void GatherObjects(IThreadSafeObject* in_obj, int& object_counter, vector<Cluster*>& clusters_to_merge)
+	void GatherObjects(IThreadSafeObject* in_obj, vector<Cluster*>& clusters_to_merge)
 	{
 		ThreadSafeObjectsArray objects_to_handle;
 		objects_to_handle.push_back(in_obj);
@@ -132,7 +132,6 @@ private:
 				obj->cluster_ = this;
 				obj->IsConstDependentOn(const_dependencies_);
 				obj->IsDependentOn(objects_to_handle);
-				object_counter--;
 			}
 			else if (obj->cluster_ != this)
 			{
@@ -145,15 +144,20 @@ private:
 	{
 		vector<Cluster*> clusters_to_merge;
 		clusters_to_merge.reserve(128);
-		int objects_counter = all_objects.size();
 		unsigned int cluster_counter = 0;
 		int first_remaining_obj_index = -1;
-		while (objects_counter > 0)
+		while (true)
 		{
+			do { first_remaining_obj_index++; } 
+			while ((first_remaining_obj_index < all_objects.size())
+			       && (nullptr != all_objects[first_remaining_obj_index]->cluster_));
+			if(all_objects.size() == first_remaining_obj_index)
+			{
+				break;
+			}
 			assert(cluster_counter < preallocated_clusters.size());
 			Cluster* cluster = &preallocated_clusters[cluster_counter];
-			do { first_remaining_obj_index++; } while (nullptr != all_objects[first_remaining_obj_index]->cluster_);
-			cluster->GatherObjects(all_objects[first_remaining_obj_index], objects_counter, clusters_to_merge);
+			cluster->GatherObjects(all_objects[first_remaining_obj_index], clusters_to_merge);
 			if (clusters_to_merge.empty())
 			{
 				cluster->index = clusters.size();
