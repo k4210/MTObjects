@@ -145,16 +145,13 @@ private:
 		vector<Cluster*> clusters_to_merge;
 		clusters_to_merge.reserve(128);
 		unsigned int cluster_counter = 0;
-		int first_remaining_obj_index = -1;
-		while (true)
+		for(int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
 		{
-			do { first_remaining_obj_index++; } 
-			while ((first_remaining_obj_index < all_objects.size())
-			       && (nullptr != all_objects[first_remaining_obj_index]->cluster_));
-			if(all_objects.size() == first_remaining_obj_index)
+			if(nullptr == all_objects[first_remaining_obj_index]->cluster_)
 			{
-				break;
+				continue;
 			}
+
 			assert(cluster_counter < preallocated_clusters.size());
 			Cluster* cluster = &preallocated_clusters[cluster_counter];
 			cluster->GatherObjects(all_objects[first_remaining_obj_index], clusters_to_merge);
