@@ -147,7 +147,7 @@ private:
 		unsigned int cluster_counter = 0;
 		for(int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
 		{
-			if(nullptr == all_objects[first_remaining_obj_index]->cluster_)
+			if(nullptr != all_objects[first_remaining_obj_index]->cluster_)
 			{
 				continue;
 			}
