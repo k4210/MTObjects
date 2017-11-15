@@ -1,9 +1,15 @@
 #pragma once
 
+#ifndef TEST_STUFF
+#define TEST_STUFF
+#endif
+
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
+#ifdef TEST_STUFF 
 #include <assert.h>
+#endif //TEST_STUFF
 #include <deque>
 #include <iterator>
 namespace MTObjects
@@ -11,6 +17,20 @@ namespace MTObjects
 using std::unordered_set;
 using std::vector;
 using std::deque;
+
+#ifdef TEST_STUFF 
+struct TestStuff
+{
+	static unsigned int cluster_in_obj_overwritten;
+};
+
+#define Assert assert
+
+#else
+
+#define Assert(expression) ((void)0)
+
+#endif //TEST_STUFF
 
 template<typename T, unsigned int N> struct SmartArray
 {
@@ -26,13 +46,13 @@ public:
 	unsigned int size() const { return size_; }
 	bool empty() const { return 0 == size_; }
 
-	void pop_back() { assert(size_); size_--; }
-	T& back() { assert(size_); return data_[size_ - 1]; }
-	const T& back() const { assert(size_); return data_[size_ - 1]; }
+	void pop_back() { Assert(size_); size_--; }
+	T& back() { Assert(size_); return data_[size_ - 1]; }
+	const T& back() const { Assert(size_); return data_[size_ - 1]; }
 
 	void push_back(const T& value) 
 	{ 
-		assert(size_ < N); 
+		Assert(size_ < N);
 		data_[size_] = value;
 		size_++;
 	}
@@ -43,7 +63,7 @@ public:
 	template<class Iter>
 	void insert_back(Iter begin, Iter end)
 	{
-		assert(std::distance(begin, end) < static_cast<int>(N - size_));
+		Assert(std::distance(begin, end) < static_cast<int>(N - size_));
 		while (begin != end)
 		{
 			data_[size_] = *begin;
@@ -52,6 +72,8 @@ public:
 		}
 	}
 };
+
+
 
 struct IThreadSafeObject;
 typedef SmartArray<IThreadSafeObject*, 512> ThreadSafeObjectsArray;
@@ -98,6 +120,9 @@ private:
 		for (auto obj : objects_)
 		{
 			obj->cluster_ = &main_cluster;
+#ifdef TEST_STUFF 
+			TestStuff::cluster_in_obj_overwritten++;
+#endif //TEST_STUFF
 		}
 		main_cluster.objects_.insert(main_cluster.objects_.end(), objects_.begin(), objects_.end());
 		main_cluster.const_dependencies_.insert(main_cluster.const_dependencies_.end(), const_dependencies_.begin(), const_dependencies_.end());
@@ -145,14 +170,14 @@ private:
 		vector<Cluster*> clusters_to_merge;
 		clusters_to_merge.reserve(128);
 		unsigned int cluster_counter = 0;
-		for(int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
+		for(unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
 		{
 			if(nullptr != all_objects[first_remaining_obj_index]->cluster_)
 			{
 				continue;
 			}
 
-			assert(cluster_counter < preallocated_clusters.size());
+			Assert(cluster_counter < preallocated_clusters.size());
 			Cluster* cluster = &preallocated_clusters[cluster_counter];
 			cluster->GatherObjects(all_objects[first_remaining_obj_index], clusters_to_merge);
 			if (clusters_to_merge.empty())
@@ -212,7 +237,7 @@ public:
 		CreateClustersDependencies(clusters);
 		return clusters;
 	}
-
+#ifdef TEST_STUFF 
 	static bool Test_AreClustersCoherent(const vector<Cluster*>& clusters)
 	{
 		// All dependencies of the objects must be inside the cluster
@@ -220,18 +245,19 @@ public:
 		{
 			for (auto obj : cluster->objects_)
 			{
-				assert(obj && obj->cluster_ == cluster);
+				Assert(obj && obj->cluster_ == cluster);
 
 				ThreadSafeObjectsArray dependencies;
 				obj->IsDependentOn(dependencies);
 				for (auto dep : dependencies)
 				{
-					assert(dep && dep->cluster_ == cluster);
+					Assert(dep && dep->cluster_ == cluster);
 				}
 			}
 		}
 		return true;
 	}
+#endif //TEST_STUFF
 };
 
 struct GroupOfConcurrentClusters : public vector<Cluster*>

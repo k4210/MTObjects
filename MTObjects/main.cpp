@@ -9,6 +9,10 @@ using namespace MTObjects;
 using std::vector;
 using std::deque;
 
+#ifdef TEST_STUFF 
+unsigned int TestStuff::cluster_in_obj_overwritten;
+#endif //TEST_STUFF
+
 class TestObject : public IThreadSafeObject
 {
 public:
@@ -92,6 +96,8 @@ static void Test(vector<TestObject>& vec_obj, bool print_inside_group)
 
 	deque<Cluster> preallocated_clusters(all_objects.size() / 2);
 
+	std::cout << std::endl;
+
 	std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
 	Cluster::ClearClustersInObjects(all_objects);
 	const vector<Cluster*> clusters = Cluster::GenerateClusters(all_objects, preallocated_clusters);
@@ -99,7 +105,9 @@ static void Test(vector<TestObject>& vec_obj, bool print_inside_group)
 	std::cout << "GenerateClusters [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_1 - time_0).count() << std::endl;
 	std::cout << "clusters: " << clusters.size() << std::endl;
 
+#ifdef TEST_STUFF 
 	Cluster::Test_AreClustersCoherent(clusters);
+#endif //TEST_STUFF
 
 	std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
 	const vector<GroupOfConcurrentClusters> groups = GroupOfConcurrentClusters::GenerateClusterGroups(clusters);
@@ -124,8 +132,6 @@ static void Test(vector<TestObject>& vec_obj, bool print_inside_group)
 			std::cout << std::endl;
 		}
 	}
-
-	std::cout << std::endl;
 }
 
 void main()
@@ -159,13 +165,19 @@ void main()
 	}
 	std::cout << std::endl;
 	
-	std::default_random_engine generator;
+	std::default_random_engine generator(7);
 	for (int i = 0; i < repeat_test; i++)
 	{
 		std::cout << "Test: " << i << " Generating objects..." << std::endl;
 		auto objects = GenerateObjects(num_objects, forced_clusters, dependencies_num, const_dependencies_num, generator);
 		std::cout << "Objects were generated." << std::endl;
+
 		Test(objects, print_inside_group);
+#ifdef TEST_STUFF 
+		std::cout << "cluster_in_obj_overwritten: " << TestStuff::cluster_in_obj_overwritten << std::endl;
+		TestStuff::cluster_in_obj_overwritten = 0;
+#endif //TEST_STUFF
+		std::cout << std::endl;
 	}
 	
 	getchar();
