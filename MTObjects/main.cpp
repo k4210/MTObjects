@@ -17,6 +17,7 @@ class TestObject : public IThreadSafeObject
 {
 public:
 	vector<TestObject*> dependencies_;
+	int fake_data[31];
 	vector<const TestObject*> const_dependencies_;
 
 	int id_ = -1;
@@ -39,6 +40,8 @@ public:
 
 static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_num, int dependencies_num, int const_dependencies_num, std::default_random_engine& generator)
 {
+	std::cout << "Generating objects..." << std::endl;
+
 	vector<TestObject> vec_obj(num_objects);
 	const bool use_forced_clusters = forced_clusters_num > 1;
 	vector<vector<TestObject*>> forced_clusters(forced_clusters_num);
@@ -82,10 +85,13 @@ static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_n
 			}
 		}
 	}
+
+	std::cout << "Objects were generated." << std::endl;
+
 	return vec_obj;
 }
 
-static void Test(vector<TestObject>& vec_obj, bool print_inside_group)
+static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject>& vec_obj)
 {
 	vector<IThreadSafeObject*> all_objects;
 	all_objects.reserve(vec_obj.size());
@@ -93,7 +99,12 @@ static void Test(vector<TestObject>& vec_obj, bool print_inside_group)
 	{
 		all_objects.emplace_back(&vec_obj[i]);
 	}
+	std::random_shuffle(all_objects.begin(), all_objects.end());
+	return all_objects;
+}
 
+static long long Test(vector<IThreadSafeObject*> all_objects, bool test_group, bool verbose)
+{
 	deque<Cluster> preallocated_clusters(all_objects.size() / 2);
 
 	std::cout << std::endl;
@@ -102,49 +113,66 @@ static void Test(vector<TestObject>& vec_obj, bool print_inside_group)
 	Cluster::ClearClustersInObjects(all_objects);
 	const vector<Cluster*> clusters = Cluster::GenerateClusters(all_objects, preallocated_clusters);
 	std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
-	std::cout << "GenerateClusters [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_1 - time_0).count() << std::endl;
-	std::cout << "clusters: " << clusters.size() << std::endl;
+	std::chrono::system_clock::duration duration = time_1 - time_0;
+	auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+	std::cout << "GenerateClusters [ms]: " << ms << std::endl;
+	std::cout << "clusters: " << clusters.size();
+
+	if (verbose)
+	{
+		std::cout << " : ";
+		for (auto cluster : clusters)
+		{
+			std::cout << cluster->objects_.size() << " \t";
+		}
+	}
+	std::cout << std::endl;
 
 #ifdef TEST_STUFF 
 	Cluster::Test_AreClustersCoherent(clusters);
 #endif //TEST_STUFF
-
-	std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
-	const vector<GroupOfConcurrentClusters> groups = GroupOfConcurrentClusters::GenerateClusterGroups(clusters);
-	std::chrono::system_clock::time_point time_3 = std::chrono::system_clock::now();
-	std::cout << "GenerateClusterGroups [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_3 - time_2).count() << std::endl;
-	std::cout << "groups: " << groups.size() << std::endl;
-
-	if (print_inside_group)
+	
+	if (test_group)
 	{
-		for (unsigned int group_idx = 0; group_idx < groups.size(); group_idx++)
+		std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
+		const vector<GroupOfConcurrentClusters> groups = GroupOfConcurrentClusters::GenerateClusterGroups(clusters);
+		std::chrono::system_clock::time_point time_3 = std::chrono::system_clock::now();
+		std::cout << "GenerateClusterGroups [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_3 - time_2).count() << std::endl;
+		std::cout << "groups: " << groups.size() << std::endl;
+		if (verbose)
 		{
-			const GroupOfConcurrentClusters& group = groups[group_idx];
-			std::cout << group_idx << "[" << group.size() << "]\t ";
-
-			for (unsigned int cluster_idx = 0; cluster_idx < group.size(); cluster_idx++)
+			for (unsigned int group_idx = 0; group_idx < groups.size(); group_idx++)
 			{
-				auto& cluster = group[cluster_idx];
-				std::cout << cluster->objects_.size()
-					//<< "(" << cluster->const_dependencies_clusters_.size() << ")"
-					<< "\t ";
+				const GroupOfConcurrentClusters& group = groups[group_idx];
+				std::cout << group_idx << "[" << group.size() << "]\t ";
+
+				for (unsigned int cluster_idx = 0; cluster_idx < group.size(); cluster_idx++)
+				{
+					auto& cluster = group[cluster_idx];
+					std::cout << cluster->objects_.size()
+						//<< "(" << cluster->const_dependencies_clusters_.size() << ")"
+						<< "\t ";
+				}
+				std::cout << std::endl;
 			}
-			std::cout << std::endl;
 		}
 	}
+	return ms;
 }
 
 void main()
 {
+	const bool read_user_input = false;
+
 	int num_objects = 1024 * 1024;
 	int forced_clusters = 1024;
 	int dependencies_num = 4;
 	int const_dependencies_num = 1;
 
-	bool print_inside_group = false;
+	bool verbose = false;
+	bool test_group = false;
 	int repeat_test = 16;
 
-	const bool read_user_input = false;
 	if (read_user_input)
 	{
 		std::cout << "num_objects: ";
@@ -165,20 +193,24 @@ void main()
 	}
 	std::cout << std::endl;
 	
-	std::default_random_engine generator(7);
+	std::default_random_engine generator;
+	long long all_time = 0;
+
 	for (int i = 0; i < repeat_test; i++)
 	{
-		std::cout << "Test: " << i << " Generating objects..." << std::endl;
 		auto objects = GenerateObjects(num_objects, forced_clusters, dependencies_num, const_dependencies_num, generator);
-		std::cout << "Objects were generated." << std::endl;
+		auto shuffled_objects = ShuffleObjects(objects);
 
-		Test(objects, print_inside_group);
+		std::cout << "Test: " << i << std::endl;
+
+		all_time += Test(shuffled_objects, test_group, verbose);
 #ifdef TEST_STUFF 
 		std::cout << "cluster_in_obj_overwritten: " << TestStuff::cluster_in_obj_overwritten << std::endl;
 		TestStuff::cluster_in_obj_overwritten = 0;
 #endif //TEST_STUFF
 		std::cout << std::endl;
 	}
+	std::cout << "Average time [ms]: " << all_time / repeat_test << std::endl;
 	
 	getchar();
 	getchar();

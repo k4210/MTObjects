@@ -1,7 +1,7 @@
 #pragma once
 
 #ifndef TEST_STUFF
-#define TEST_STUFF
+//#define TEST_STUFF
 #endif
 
 #include <unordered_set>
@@ -91,7 +91,7 @@ public:
 
 struct Cluster
 {
-	vector<IThreadSafeObject*> objects_;			  //with duplicates
+	vector<IThreadSafeObject*> objects_;			  //no duplicates
 	vector<const IThreadSafeObject*> const_dependencies_; //with duplicates
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
@@ -188,15 +188,28 @@ private:
 			}
 			else
 			{
-				Cluster* main_cluster = clusters_to_merge[0];
-				cluster->MergeTo(*main_cluster);
-				cluster->Reset();
 				const int num_clusters_to_merge = clusters_to_merge.size();
+				Cluster* main_cluster = clusters_to_merge[0];
+				/*
+				unsigned int num_obj_in_cluster = main_cluster->objects_.size();
 				for (int i = 1; i < num_clusters_to_merge; i++)
 				{
-					Cluster* redundant_cluster = clusters_to_merge[i];
-					if ((redundant_cluster->index != -1) && (redundant_cluster != main_cluster))
+					if (clusters_to_merge[i]->objects_.size() > num_obj_in_cluster)
 					{
+						num_obj_in_cluster = clusters_to_merge[i]->objects_.size();
+						main_cluster = clusters_to_merge[i];
+					}
+				}
+				*/
+				cluster->MergeTo(*main_cluster);
+				cluster->Reset();
+				
+				for (int i = 0; i < num_clusters_to_merge; i++)
+				{
+					Cluster* redundant_cluster = clusters_to_merge[i];
+					if (redundant_cluster != main_cluster)
+					{
+						Assert(redundant_cluster->index != -1);
 						redundant_cluster->MergeTo(*main_cluster);
 						RemoveCluster(clusters, redundant_cluster);
 						redundant_cluster->Reset();
@@ -243,7 +256,8 @@ public:
 		// All dependencies of the objects must be inside the cluster
 		for (auto cluster : clusters)
 		{
-			for (auto obj : cluster->objects_)
+			auto& objects = cluster->objects_;
+			for (auto obj : objects)
 			{
 				Assert(obj && obj->cluster_ == cluster);
 
@@ -253,6 +267,12 @@ public:
 				{
 					Assert(dep && dep->cluster_ == cluster);
 				}
+			}
+			std::sort(objects.begin(), objects.end());
+			const int last_index = objects.size() - 1;
+			for (int i = 1; i < last_index; i++)
+			{
+				Assert(objects[i] != objects[i+1]);
 			}
 		}
 		return true;
