@@ -38,13 +38,22 @@ public:
 	}
 };
 
-static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_num, int dependencies_num, int const_dependencies_num, std::default_random_engine& generator)
+vector<TestObject> vec_obj;
+
+static void GenerateObjects(int num_objects, int forced_clusters_num, int dependencies_num, int const_dependencies_num, std::default_random_engine& generator)
 {
 	std::cout << "Generating objects..." << std::endl;
 
-	vector<TestObject> vec_obj(num_objects);
+	vector<vector<TestObject*>> forced_clusters;
+
+	vec_obj.clear();
+	vec_obj.resize(num_objects);
 	const bool use_forced_clusters = forced_clusters_num > 1;
-	vector<vector<TestObject*>> forced_clusters(forced_clusters_num);
+	if (use_forced_clusters)
+	{
+		forced_clusters.clear();
+		forced_clusters.resize(forced_clusters_num);
+	}
 
 	for (int i = 0; i < num_objects; i++)
 	{
@@ -87,11 +96,9 @@ static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_n
 	}
 
 	std::cout << "Objects were generated." << std::endl;
-
-	return vec_obj;
 }
 
-static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject>& vec_obj)
+static vector<IThreadSafeObject*> ShuffleObjects()
 {
 	vector<IThreadSafeObject*> all_objects;
 	all_objects.reserve(vec_obj.size());
@@ -193,14 +200,15 @@ void main()
 	}
 	std::cout << std::endl;
 	
-	std::default_random_engine generator;
-	long long all_time = 0;
+	{
+		std::default_random_engine generator;
+		GenerateObjects(num_objects, forced_clusters, dependencies_num, const_dependencies_num, generator);
+	}
+	auto shuffled_objects = ShuffleObjects();
 
+	long long all_time = 0;
 	for (int i = 0; i < repeat_test; i++)
 	{
-		auto objects = GenerateObjects(num_objects, forced_clusters, dependencies_num, const_dependencies_num, generator);
-		auto shuffled_objects = ShuffleObjects(objects);
-
 		std::cout << "Test: " << i << std::endl;
 
 		all_time += Test(shuffled_objects, test_group, verbose);

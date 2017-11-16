@@ -190,17 +190,6 @@ private:
 			{
 				const int num_clusters_to_merge = clusters_to_merge.size();
 				Cluster* main_cluster = clusters_to_merge[0];
-				/*
-				unsigned int num_obj_in_cluster = main_cluster->objects_.size();
-				for (int i = 1; i < num_clusters_to_merge; i++)
-				{
-					if (clusters_to_merge[i]->objects_.size() > num_obj_in_cluster)
-					{
-						num_obj_in_cluster = clusters_to_merge[i]->objects_.size();
-						main_cluster = clusters_to_merge[i];
-					}
-				}
-				*/
 				cluster->MergeTo(*main_cluster);
 				cluster->Reset();
 				
