@@ -11,6 +11,7 @@ using std::deque;
 
 #ifdef TEST_STUFF 
 unsigned int TestStuff::cluster_in_obj_overwritten;
+unsigned int TestStuff::objects_to_handle;
 #endif //TEST_STUFF
 
 class TestObject : public IThreadSafeObject
@@ -219,7 +220,10 @@ void main()
 		std::cout << std::endl;
 	}
 	std::cout << "Average time [ms]: " << all_time / repeat_test << std::endl;
-	
+#ifdef TEST_STUFF 
+	std::cout << "objects_to_handle: " << TestStuff::objects_to_handle << std::endl;
+	TestStuff::cluster_in_obj_overwritten = 0;
+#endif //TEST_STUFF
 	getchar();
 	getchar();
 }

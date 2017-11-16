@@ -22,6 +22,7 @@ using std::deque;
 struct TestStuff
 {
 	static unsigned int cluster_in_obj_overwritten;
+	static unsigned int objects_to_handle;
 };
 
 #define Assert assert
@@ -76,7 +77,7 @@ public:
 
 
 struct IThreadSafeObject;
-typedef SmartArray<IThreadSafeObject*, 512> ThreadSafeObjectsArray;
+typedef SmartArray<IThreadSafeObject*, 128> ThreadSafeObjectsArray;
 
 struct IThreadSafeObject
 {
@@ -132,19 +133,23 @@ private:
 
 	static void RemoveCluster(vector<Cluster*> &clusters, const Cluster* cluster)
 	{
-		const int last_index = clusters.size() - 1;
 		const int index_to_reuse = cluster->index;
-		if (last_index != index_to_reuse)
+		if (index_to_reuse != -1)
 		{
-			Cluster* const moved_cluster = clusters[last_index];
-			clusters[index_to_reuse] = moved_cluster;
-			moved_cluster->index = index_to_reuse;
+			const int last_index = clusters.size() - 1;
+			if (last_index != index_to_reuse)
+			{
+				Cluster* const moved_cluster = clusters[last_index];
+				clusters[index_to_reuse] = moved_cluster;
+				moved_cluster->index = index_to_reuse;
+			}
+			clusters.pop_back();
 		}
-		clusters.pop_back();
 	}
 
-	void GatherObjects(IThreadSafeObject* in_obj, vector<Cluster*>& clusters_to_merge)
+	static Cluster* GatherObjects(Cluster* new_cluster, IThreadSafeObject* in_obj, vector<Cluster*>& clusters)
 	{
+		Cluster* actual_cluster = new_cluster;
 		ThreadSafeObjectsArray objects_to_handle;
 		objects_to_handle.push_back(in_obj);
 		while (!objects_to_handle.empty())
@@ -153,22 +158,32 @@ private:
 			objects_to_handle.pop_back();
 			if (nullptr == obj->cluster_)
 			{
-				objects_.emplace_back(obj);
-				obj->cluster_ = this;
-				obj->IsConstDependentOn(const_dependencies_);
+				actual_cluster->objects_.emplace_back(obj);
+				obj->cluster_ = actual_cluster;
+				obj->IsConstDependentOn(actual_cluster->const_dependencies_);
 				obj->IsDependentOn(objects_to_handle);
+#ifdef TEST_STUFF 
+				TestStuff::objects_to_handle = std::max(objects_to_handle.size(), TestStuff::objects_to_handle);
+#endif //TEST_STUFF
+				
 			}
-			else if (obj->cluster_ != this)
+			else if (obj->cluster_ != actual_cluster)
 			{
-				clusters_to_merge.emplace_back(obj->cluster_);
+				const bool use_new_cluster = obj->cluster_->objects_.size() > actual_cluster->objects_.size();
+				Cluster* to_merge = use_new_cluster ? actual_cluster : obj->cluster_;
+				actual_cluster = use_new_cluster ? obj->cluster_ : actual_cluster;
+
+				to_merge->MergeTo(*actual_cluster);
+				RemoveCluster(clusters, to_merge);
+				to_merge->Reset();
 			}
 		}
+
+		return actual_cluster;
 	}
 
 	static void CreateClusters(const vector<IThreadSafeObject *> &all_objects, vector<Cluster*> &clusters, deque<Cluster>& preallocated_clusters)
 	{
-		vector<Cluster*> clusters_to_merge;
-		clusters_to_merge.reserve(128);
 		unsigned int cluster_counter = 0;
 		for(unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
 		{
@@ -178,33 +193,13 @@ private:
 			}
 
 			Assert(cluster_counter < preallocated_clusters.size());
-			Cluster* cluster = &preallocated_clusters[cluster_counter];
-			cluster->GatherObjects(all_objects[first_remaining_obj_index], clusters_to_merge);
-			if (clusters_to_merge.empty())
+			Cluster* new_cluster = &preallocated_clusters[cluster_counter];
+			Cluster* acltual_cluster = GatherObjects(new_cluster, all_objects[first_remaining_obj_index], clusters);
+			if (acltual_cluster == new_cluster)
 			{
-				cluster->index = clusters.size();
-				clusters.emplace_back(cluster);
+				new_cluster->index = clusters.size();
+				clusters.emplace_back(new_cluster);
 				cluster_counter++;
-			}
-			else
-			{
-				const int num_clusters_to_merge = clusters_to_merge.size();
-				Cluster* main_cluster = clusters_to_merge[0];
-				cluster->MergeTo(*main_cluster);
-				cluster->Reset();
-				
-				for (int i = 0; i < num_clusters_to_merge; i++)
-				{
-					Cluster* redundant_cluster = clusters_to_merge[i];
-					if (redundant_cluster != main_cluster)
-					{
-						Assert(redundant_cluster->index != -1);
-						redundant_cluster->MergeTo(*main_cluster);
-						RemoveCluster(clusters, redundant_cluster);
-						redundant_cluster->Reset();
-					}
-				}
-				clusters_to_merge.clear();
 			}
 		}
 	}
