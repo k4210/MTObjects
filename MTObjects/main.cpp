@@ -11,8 +11,12 @@ using std::deque;
 
 #ifdef TEST_STUFF 
 unsigned int TestStuff::cluster_in_obj_overwritten;
-unsigned int TestStuff::objects_to_handle;
+unsigned int TestStuff::max_num_objects_to_handle;
+std::size_t TestStuff::max_num_clusters;
+unsigned int TestStuff::max_num_data_chunks_used;
 #endif //TEST_STUFF
+
+SmartStackStuff::DataChunkMemoryPool64 SmartStackStuff::DataChunkMemoryPool64::instance;
 
 class TestObject : public IThreadSafeObject
 {
@@ -23,14 +27,24 @@ public:
 
 	int id_ = -1;
 
-	void IsDependentOn(ThreadSafeObjectsArray& ref_dependencies) const override
+	void IsDependentOn(SmartStack<IThreadSafeObject*>& ref_dependencies) const override
 	{
-		ref_dependencies.insert_back(dependencies_.begin(), dependencies_.end());
+		for (auto dep : dependencies_)
+		{
+			ref_dependencies.push_back(dep);
+		}
+		//TODO:
+		//ref_dependencies.insert_back(dependencies_.begin(), dependencies_.end());
 	}
 
-	void IsConstDependentOn(vector<const IThreadSafeObject*>& ref_dependencies) const override
+	void IsConstDependentOn(SmartStack<const IThreadSafeObject*>& ref_dependencies) const override
 	{
-		ref_dependencies.insert(ref_dependencies.end(), const_dependencies_.begin(), const_dependencies_.end());
+		for (auto dep : const_dependencies_)
+		{
+			ref_dependencies.push_back(dep);
+		}
+		//TODO:
+		//ref_dependencies.insert(ref_dependencies.end(), const_dependencies_.begin(), const_dependencies_.end());
 	}
 
 	void Task()
@@ -39,12 +53,11 @@ public:
 	}
 };
 
-vector<TestObject> vec_obj;
-
-static void GenerateObjects(int num_objects, int forced_clusters_num, int dependencies_num, int const_dependencies_num, std::default_random_engine& generator)
+static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_num, int dependencies_num, int const_dependencies_num, std::default_random_engine& generator)
 {
 	std::cout << "Generating objects..." << std::endl;
 
+	vector<TestObject> vec_obj;
 	vector<vector<TestObject*>> forced_clusters;
 
 	vec_obj.clear();
@@ -65,10 +78,10 @@ static void GenerateObjects(int num_objects, int forced_clusters_num, int depend
 			std::uniform_int_distribution<int> cluster_distribution(0, forced_clusters_num - 1);
 			const int forced_cluster_idx = cluster_distribution(generator);
 			vector<TestObject*>& cluster = forced_clusters[forced_cluster_idx];
-			const int actual_dependency_num = std::min<int>(dependencies_num, cluster.size());
+			const size_t actual_dependency_num = std::min<size_t>(dependencies_num, cluster.size());
 			if (actual_dependency_num > 0)
 			{
-				std::uniform_int_distribution<int> dependency_distribution(0, cluster.size() - 1);
+				std::uniform_int_distribution<size_t> dependency_distribution(0, cluster.size() - 1);
 				for (int j = 0; j < dependencies_num; j++)
 				{
 					auto dep_obj = cluster[dependency_distribution(generator)];
@@ -97,9 +110,11 @@ static void GenerateObjects(int num_objects, int forced_clusters_num, int depend
 	}
 
 	std::cout << "Objects were generated." << std::endl;
+
+	return vec_obj;
 }
 
-static vector<IThreadSafeObject*> ShuffleObjects()
+static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject>& vec_obj)
 {
 	vector<IThreadSafeObject*> all_objects;
 	all_objects.reserve(vec_obj.size());
@@ -107,7 +122,9 @@ static vector<IThreadSafeObject*> ShuffleObjects()
 	{
 		all_objects.emplace_back(&vec_obj[i]);
 	}
-	std::random_shuffle(all_objects.begin(), all_objects.end());
+
+	std::mt19937 randomizer;
+	std::shuffle(all_objects.begin(), all_objects.end(), randomizer);
 	return all_objects;
 }
 
@@ -172,10 +189,19 @@ void main()
 {
 	const bool read_user_input = false;
 
+/*
+#ifdef TEST_STUFF 
+	int num_objects = 64 * 1024;
+	int forced_clusters = 64;
+	int dependencies_num = 4;
+	int const_dependencies_num = 1;
+#else
+*/
 	int num_objects = 1024 * 1024;
 	int forced_clusters = 1024;
 	int dependencies_num = 4;
 	int const_dependencies_num = 1;
+//#endif
 
 	bool verbose = false;
 	bool test_group = false;
@@ -201,11 +227,9 @@ void main()
 	}
 	std::cout << std::endl;
 	
-	{
-		std::default_random_engine generator;
-		GenerateObjects(num_objects, forced_clusters, dependencies_num, const_dependencies_num, generator);
-	}
-	auto shuffled_objects = ShuffleObjects();
+	std::default_random_engine generator;
+	auto objects = GenerateObjects(num_objects, forced_clusters, dependencies_num, const_dependencies_num, generator);
+	auto shuffled_objects = ShuffleObjects(objects);
 
 	long long all_time = 0;
 	for (int i = 0; i < repeat_test; i++)
@@ -216,12 +240,14 @@ void main()
 #ifdef TEST_STUFF 
 		std::cout << "cluster_in_obj_overwritten: " << TestStuff::cluster_in_obj_overwritten << std::endl;
 		TestStuff::cluster_in_obj_overwritten = 0;
+		std::cout << "max_num_data_chunks_used: " << TestStuff::max_num_data_chunks_used << std::endl;
+		std::cout << "max_num_clusters: " << TestStuff::max_num_clusters << std::endl;
 #endif //TEST_STUFF
 		std::cout << std::endl;
 	}
 	std::cout << "Average time [ms]: " << all_time / repeat_test << std::endl;
 #ifdef TEST_STUFF 
-	std::cout << "objects_to_handle: " << TestStuff::objects_to_handle << std::endl;
+	std::cout << "objects_to_handle: " << TestStuff::max_num_objects_to_handle << std::endl;
 	TestStuff::cluster_in_obj_overwritten = 0;
 #endif //TEST_STUFF
 	getchar();

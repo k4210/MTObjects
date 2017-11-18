@@ -1,83 +1,17 @@
 #pragma once
 
-#ifndef TEST_STUFF
-//#define TEST_STUFF
-#endif
-
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
-#ifdef TEST_STUFF 
-#include <assert.h>
-#endif //TEST_STUFF
 #include <deque>
-#include <iterator>
+
+#include "Utils.h"
+
 namespace MTObjects
 {
 using std::unordered_set;
 using std::vector;
 using std::deque;
-
-#ifdef TEST_STUFF 
-struct TestStuff
-{
-	static unsigned int cluster_in_obj_overwritten;
-	static unsigned int objects_to_handle;
-};
-
-#define Assert assert
-
-#else
-
-#define Assert(expression) ((void)0)
-
-#endif //TEST_STUFF
-
-template<typename T, unsigned int N> struct SmartArray
-{
-private:
-	unsigned int size_ = 0;
-	T data_[N];
-public:
-	T* begin() { return data_; }
-	T* end() { return data_ + size_; }
-	const T* begin() const { return data_; }
-	const T* end() const { return data_ + size_; }
-
-	unsigned int size() const { return size_; }
-	bool empty() const { return 0 == size_; }
-
-	void pop_back() { Assert(size_); size_--; }
-	T& back() { Assert(size_); return data_[size_ - 1]; }
-	const T& back() const { Assert(size_); return data_[size_ - 1]; }
-
-	void push_back(const T& value) 
-	{ 
-		Assert(size_ < N);
-		data_[size_] = value;
-		size_++;
-	}
-
-	const T& operator[](unsigned int pos) const { return data[pos]; }
-	T& operator[](unsigned int pos) { return data[pos]; }
-
-	template<class Iter>
-	void insert_back(Iter begin, Iter end)
-	{
-		Assert(std::distance(begin, end) < static_cast<int>(N - size_));
-		while (begin != end)
-		{
-			data_[size_] = *begin;
-			begin++;
-			size_++;
-		}
-	}
-};
-
-
-
-struct IThreadSafeObject;
-typedef SmartArray<IThreadSafeObject*, 128> ThreadSafeObjectsArray;
 
 struct IThreadSafeObject
 {
@@ -86,14 +20,15 @@ private:
 	Cluster* cluster_ = nullptr;
 
 public:
-	virtual void IsDependentOn(ThreadSafeObjectsArray& ref_dependencies) const = 0;
-	virtual void IsConstDependentOn(vector<const IThreadSafeObject*>& ref_dependencies) const = 0;
+	virtual void IsDependentOn(SmartStack<IThreadSafeObject*>& ref_dependencies) const = 0;
+	virtual void IsConstDependentOn(SmartStack<const IThreadSafeObject*>& ref_dependencies) const = 0;
 };
 
 struct Cluster
 {
-	vector<IThreadSafeObject*> objects_;			  //no duplicates
-	vector<const IThreadSafeObject*> const_dependencies_; //with duplicates
+	SmartStack<IThreadSafeObject*> objects_;			  //no duplicates
+
+	SmartStack<const IThreadSafeObject*> const_dependencies_; //with duplicates
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
 	int index = -1;
@@ -102,15 +37,12 @@ struct Cluster
 	{
 		objects_.clear();
 		const_dependencies_.clear();
-		const_dependencies_clusters_.clear();
+
 		index = -1;
 	}
 
 	Cluster()
 	{
-		objects_.reserve(128);
-		const_dependencies_.reserve(128);
-		const_dependencies_clusters_.reserve(128);
 		Reset();
 	}
 
@@ -125,9 +57,8 @@ private:
 			TestStuff::cluster_in_obj_overwritten++;
 #endif //TEST_STUFF
 		}
-		main_cluster.objects_.insert(main_cluster.objects_.end(), objects_.begin(), objects_.end());
-		main_cluster.const_dependencies_.insert(main_cluster.const_dependencies_.end(), const_dependencies_.begin(), const_dependencies_.end());
-
+		SmartStack<IThreadSafeObject*>::UnorderedMerge(main_cluster.objects_, objects_);
+		//SmartStack<const IThreadSafeObject*>::UnorderedMerge(main_cluster.const_dependencies_, const_dependencies_);
 		//At this stage const_dependencies_clusters_ are not generated yet
 	}
 
@@ -136,7 +67,7 @@ private:
 		const int index_to_reuse = cluster->index;
 		if (index_to_reuse != -1)
 		{
-			const int last_index = clusters.size() - 1;
+			const auto last_index = clusters.size() - 1;
 			if (last_index != index_to_reuse)
 			{
 				Cluster* const moved_cluster = clusters[last_index];
@@ -150,7 +81,8 @@ private:
 	static Cluster* GatherObjects(Cluster* new_cluster, IThreadSafeObject* in_obj, vector<Cluster*>& clusters)
 	{
 		Cluster* actual_cluster = new_cluster;
-		ThreadSafeObjectsArray objects_to_handle;
+		SmartStack<IThreadSafeObject*> objects_to_handle;
+		SmartStack<const IThreadSafeObject*> local_const_dependencies;
 		objects_to_handle.push_back(in_obj);
 		while (!objects_to_handle.empty())
 		{
@@ -158,17 +90,19 @@ private:
 			objects_to_handle.pop_back();
 			if (nullptr == obj->cluster_)
 			{
-				actual_cluster->objects_.emplace_back(obj);
+				actual_cluster->objects_.push_back(obj);
 				obj->cluster_ = actual_cluster;
-				obj->IsConstDependentOn(actual_cluster->const_dependencies_);
+				obj->IsConstDependentOn(local_const_dependencies);
 				obj->IsDependentOn(objects_to_handle);
 #ifdef TEST_STUFF 
-				TestStuff::objects_to_handle = std::max(objects_to_handle.size(), TestStuff::objects_to_handle);
+				TestStuff::max_num_objects_to_handle = std::max(objects_to_handle.size(), TestStuff::max_num_objects_to_handle);
 #endif //TEST_STUFF
 				
 			}
 			else if (obj->cluster_ != actual_cluster)
 			{
+				SmartStack<const IThreadSafeObject*>::UnorderedMerge(obj->cluster_->const_dependencies_, local_const_dependencies);
+
 				const bool use_new_cluster = obj->cluster_->objects_.size() > actual_cluster->objects_.size();
 				Cluster* to_merge = use_new_cluster ? actual_cluster : obj->cluster_;
 				actual_cluster = use_new_cluster ? obj->cluster_ : actual_cluster;
@@ -179,6 +113,7 @@ private:
 			}
 		}
 
+		SmartStack<const IThreadSafeObject*>::UnorderedMerge(actual_cluster->const_dependencies_, local_const_dependencies);
 		return actual_cluster;
 	}
 
@@ -197,9 +132,12 @@ private:
 			Cluster* acltual_cluster = GatherObjects(new_cluster, all_objects[first_remaining_obj_index], clusters);
 			if (acltual_cluster == new_cluster)
 			{
-				new_cluster->index = clusters.size();
+				new_cluster->index = static_cast<int>(clusters.size());
 				clusters.emplace_back(new_cluster);
 				cluster_counter++;
+#ifdef TEST_STUFF 
+				TestStuff::max_num_clusters = std::max<std::size_t>(TestStuff::max_num_clusters, clusters.size());
+#endif //TEST_STUFF
 			}
 		}
 	}
@@ -208,10 +146,13 @@ private:
 	{
 		for (auto cluster : clusters)
 		{
+			cluster->const_dependencies_clusters_.clear();
+			cluster->const_dependencies_clusters_.reserve(cluster->const_dependencies_.size());
 			//Generate cluster dependencies. It can be done, only when all objects have cluster set.
-			std::transform(cluster->const_dependencies_.begin(), cluster->const_dependencies_.end()
-				, std::inserter(cluster->const_dependencies_clusters_, cluster->const_dependencies_clusters_.begin())
-				, [](const IThreadSafeObject* obj) { return obj->cluster_; });
+			for (auto const_dep : cluster->const_dependencies_)
+			{
+				cluster->const_dependencies_clusters_.emplace(const_dep->cluster_);
+			}
 			cluster->const_dependencies_clusters_.erase(cluster);
 		}
 	}
@@ -245,18 +186,22 @@ public:
 			{
 				Assert(obj && obj->cluster_ == cluster);
 
-				ThreadSafeObjectsArray dependencies;
+				SmartStack<IThreadSafeObject*> dependencies;
 				obj->IsDependentOn(dependencies);
 				for (auto dep : dependencies)
 				{
 					Assert(dep && dep->cluster_ == cluster);
 				}
 			}
-			std::sort(objects.begin(), objects.end());
-			const int last_index = objects.size() - 1;
-			for (int i = 1; i < last_index; i++)
+			vector<IThreadSafeObject*> objects_vec(objects.begin(), objects.end());
+			std::sort(objects_vec.begin(), objects_vec.end());
+			for (auto iter = objects_vec.begin();;)
 			{
-				Assert(objects[i] != objects[i+1]);
+				auto obj = *iter;
+				iter++;
+				if (iter == objects_vec.end())
+					break;
+				Assert(obj != *iter);
 			}
 		}
 		return true;
@@ -293,17 +238,17 @@ struct GroupOfConcurrentClusters : public vector<Cluster*>
 
 		vector<GroupOfConcurrentClusters> groups;
 		groups.reserve(clusters.size());
-		groups.resize(std::max<int>(1, clusters.size() / 32));
-		int cluster_index = 0;
+		groups.resize(std::max<size_t>(1, clusters.size() / 32));
+		size_t cluster_index = 0;
 		for (auto cluster : clusters)
 		{
 			bool fits_in_existing_group = false;
 			{
-				const int group_num = groups.size();
-				const int first_group_to_try = cluster_index % group_num;
-				for (int groups_checked = 0; groups_checked < group_num && !fits_in_existing_group; groups_checked++)
+				const size_t group_num = groups.size();
+				const size_t first_group_to_try = cluster_index % group_num;
+				for (size_t groups_checked = 0; groups_checked < group_num && !fits_in_existing_group; groups_checked++)
 				{
-					const int group_idx = (first_group_to_try + groups_checked) % group_num;
+					const size_t group_idx = (first_group_to_try + groups_checked) % group_num;
 					auto& group = groups[group_idx];
 					if (fits_into_group(group, cluster))
 					{
