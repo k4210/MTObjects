@@ -14,21 +14,25 @@ template<typename T>
 //using FastContainer = vector<T, std::pmr::polymorphic_allocator>;
 using FastContainer = SmartStack<T>;
 
+struct Cluster;
+
 struct IThreadSafeObject
 {
-private:
-	friend struct Cluster;
+public:
 	Cluster* cluster_ = nullptr;
 
-public:
 	virtual void IsDependentOn(FastContainer<IThreadSafeObject*>& ref_dependencies) const = 0;
-	virtual void IsConstDependentOn(FastContainer<const IThreadSafeObject*>& ref_dependencies) const = 0;
+	virtual void IsConstDependentOn(unordered_set<const Cluster*>& ref_dependencies) const = 0;
+
+	virtual void Task()
+	{
+		cluster_ = nullptr;
+	}
 };
 
 struct Cluster
 {
 	FastContainer<IThreadSafeObject*> objects_;			  //no duplicates
-	FastContainer<const IThreadSafeObject*> const_dependencies_; //with duplicates
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
 	int index_in_clusters_vec_ = -1;
@@ -36,8 +40,7 @@ struct Cluster
 	void Reset()
 	{
 		objects_.clear();
-		const_dependencies_.clear();
-
+		const_dependencies_clusters_.clear();
 		index_in_clusters_vec_ = -1;
 	}
 
@@ -49,12 +52,13 @@ private:
 		{
 			obj->cluster_ = &main_cluster;
 #ifdef TEST_STUFF 
-			TestStuff::cluster_in_obj_overwritten++;
+			if (objects_.size() > 1)
+			{
+				TestStuff::cluster_in_obj_overwritten++;
+			}
 #endif //TEST_STUFF
 		}
 		ContainerFunc::Merge(main_cluster.objects_, objects_);
-		//SmartStack<const IThreadSafeObject*>::UnorderedMerge(main_cluster.const_dependencies_, const_dependencies_);
-		//At this stage const_dependencies_clusters_ are not generated yet
 	}
 
 	static void RemoveCluster(vector<Cluster*> &clusters, const Cluster* cluster)
@@ -77,7 +81,6 @@ private:
 	{
 		Cluster* actual_cluster = new_cluster;
 		FastContainer<IThreadSafeObject*> objects_to_handle;
-		FastContainer<const IThreadSafeObject*> local_const_dependencies;
 		objects_to_handle.push_back(in_obj);
 		while (!objects_to_handle.empty())
 		{
@@ -88,15 +91,12 @@ private:
 				actual_cluster->objects_.push_back(obj);
 				obj->cluster_ = actual_cluster;
 				obj->IsDependentOn(objects_to_handle);
-				obj->IsConstDependentOn(local_const_dependencies);
 #ifdef TEST_STUFF 
 				TestStuff::max_num_objects_to_handle = std::max<size_t>(objects_to_handle.size(), TestStuff::max_num_objects_to_handle);
 #endif //TEST_STUFF	
 			}
 			else if (obj->cluster_ != actual_cluster)
 			{
-				ContainerFunc::Merge(obj->cluster_->const_dependencies_, local_const_dependencies);
-
 				const bool use_new_cluster = obj->cluster_->objects_.size() > actual_cluster->objects_.size();
 				Cluster* to_merge = use_new_cluster ? actual_cluster : obj->cluster_;
 				actual_cluster = use_new_cluster ? obj->cluster_ : actual_cluster;
@@ -106,8 +106,6 @@ private:
 				to_merge->Reset();
 			}
 		}
-
-		ContainerFunc::Merge(actual_cluster->const_dependencies_, local_const_dependencies);
 		return actual_cluster;
 	}
 
@@ -138,28 +136,23 @@ private:
 
 	static void CreateClustersDependencies(const vector<Cluster*>& clusters)
 	{
+		auto num_clusters = clusters.size();
 		//std::for_each(std::execution::par_unseq,
 		concurrency::parallel_for_each(
 			std::begin(clusters), std::end(clusters),
-		[](Cluster* cluster){
+		[num_clusters](Cluster* cluster){
 			cluster->const_dependencies_clusters_.clear();
-			std::transform(cluster->const_dependencies_.begin(), cluster->const_dependencies_.end(), std::inserter(cluster->const_dependencies_clusters_, cluster->const_dependencies_clusters_.begin()),
-				[](const IThreadSafeObject* o) { return o->cluster_; });
+			//cluster->const_dependencies_clusters_.reserve(num_clusters);
+			for (auto obj : cluster->objects_)
+			{
+				Assert(obj->cluster_ == cluster);
+				obj->IsConstDependentOn(cluster->const_dependencies_clusters_);
+			}
 			cluster->const_dependencies_clusters_.erase(cluster);
-			cluster->const_dependencies_.clear();
 		});
 	}
 
 public:
-
-	static void ClearClustersInObjects(const vector<IThreadSafeObject*>& all_objects)
-	{
-		for (auto obj : all_objects)
-		{
-			obj->cluster_ = nullptr;
-		}
-	}
-
 	static vector<Cluster*> GenerateClusters(const vector<IThreadSafeObject*>& all_objects, vector<Cluster>& preallocated_clusters)
 	{
 		vector<Cluster*> clusters;
@@ -202,13 +195,14 @@ public:
 #endif //TEST_STUFF
 };
 
-struct GroupOfConcurrentClusters : public vector<Cluster*>
+struct GroupOfConcurrentClusters
 {
+	vector<Cluster*> clusters_;
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
 	void AddCluster(Cluster& cluster)
 	{
-		emplace_back(&cluster);
+		clusters_.emplace_back(&cluster);
 		const_dependencies_clusters_.insert(cluster.const_dependencies_clusters_.begin(), cluster.const_dependencies_clusters_.end());
 	}
 
@@ -221,7 +215,7 @@ struct GroupOfConcurrentClusters : public vector<Cluster*>
 
 		auto fits_into_group = [&](const GroupOfConcurrentClusters& group, const Cluster* cluster) -> bool
 		{
-			return std::none_of(group.begin(), group.end(), [&](const Cluster* cluster_in_group)
+			return std::none_of(group.clusters_.begin(), group.clusters_.end(), [&](const Cluster* cluster_in_group)
 			{
 				return depends_on(cluster, cluster_in_group);
 			}) 
@@ -230,7 +224,7 @@ struct GroupOfConcurrentClusters : public vector<Cluster*>
 		};
 
 		vector<GroupOfConcurrentClusters> groups;
-		groups.reserve(clusters.size());
+		groups.reserve(clusters.size()/4);
 		groups.resize(1); //groups.resize(std::max<size_t>(1, clusters.size() / 32));
 		size_t cluster_index = 0;
 		for (auto cluster : clusters)

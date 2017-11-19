@@ -36,7 +36,7 @@ namespace MTObjects
 	namespace SmartStackStuff
 	{
 		static const constexpr unsigned int kCacheLineSize = 64; // == 16 * sizeof(int) == 8 * sizeof(*int)
-		static const constexpr unsigned int kCacheLinesPerChunk = 20;
+		static const constexpr unsigned int kCacheLinesPerChunk = 8;
 		struct DataChunk
 		{
 			static const constexpr unsigned int kStoragePerChunk = (kCacheLinesPerChunk * kCacheLineSize) - (2 * sizeof(DataChunk*));
