@@ -10,7 +10,7 @@ using std::vector;
 
 #ifdef TEST_STUFF 
 unsigned int TestStuff::cluster_in_obj_overwritten;
-unsigned int TestStuff::max_num_objects_to_handle;
+std::size_t TestStuff::max_num_objects_to_handle;
 std::size_t TestStuff::max_num_clusters;
 unsigned int TestStuff::max_num_data_chunks_used;
 #endif //TEST_STUFF
@@ -27,14 +27,16 @@ public:
 
 	int id_ = -1;
 
-	void IsDependentOn(SmartStack<IThreadSafeObject*>& ref_dependencies) const override
+	void IsDependentOn(Container<IThreadSafeObject*>& ref_dependencies) const override
 	{
-		ref_dependencies.Insert(dependencies_.begin(), dependencies_.end());
+		ContainerFunc::Insert(ref_dependencies, dependencies_);
+		//ref_dependencies.Insert(dependencies_.begin(), dependencies_.end());
 	}
 
-	void IsConstDependentOn(SmartStack<const IThreadSafeObject*>& ref_dependencies) const override
+	void IsConstDependentOn(Container<const IThreadSafeObject*>& ref_dependencies) const override
 	{
-		ref_dependencies.Insert(const_dependencies_.begin(), const_dependencies_.end());
+		ContainerFunc::Insert(ref_dependencies, const_dependencies_);
+		//ref_dependencies.Insert(const_dependencies_.begin(), const_dependencies_.end());
 	}
 
 	void Task()
@@ -86,7 +88,7 @@ static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_n
 				//Const deps goes only to the first num_of_const_dep_sources clusters
 				const int num_of_const_dep_sources = 8;
 				std::uniform_int_distribution<size_t> const_dep_source_dependency_distribution(0, num_of_const_dep_sources);
-				const int forced_cluster_idx = const_dep_source_dependency_distribution(generator);
+				const auto forced_cluster_idx = const_dep_source_dependency_distribution(generator);
 				const vector<TestObject*>& cluster = forced_clusters[forced_cluster_idx];
 				const size_t actual_dependency_num = std::min<size_t>(const_dependencies_num, cluster.size());
 				if (actual_dependency_num > 0)
@@ -261,5 +263,5 @@ void main()
 	std::cout << "objects_to_handle: " << TestStuff::max_num_objects_to_handle << std::endl;
 	TestStuff::cluster_in_obj_overwritten = 0;
 #endif //TEST_STUFF
-	auto dummy = getchar();
+	getchar();
 }

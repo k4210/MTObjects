@@ -24,7 +24,7 @@ namespace MTObjects
 	struct TestStuff
 	{
 		static unsigned int cluster_in_obj_overwritten;
-		static unsigned int max_num_objects_to_handle;
+		static std::size_t max_num_objects_to_handle;
 		static std::size_t max_num_clusters;
 		static unsigned int max_num_data_chunks_used;
 	};

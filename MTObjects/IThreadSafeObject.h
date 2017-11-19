@@ -13,6 +13,9 @@ using std::unordered_set;
 using std::vector;
 using std::set;
 
+template<typename T>
+using Container = SmartStack<T>;
+
 struct IThreadSafeObject
 {
 private:
@@ -20,14 +23,44 @@ private:
 	Cluster* cluster_ = nullptr;
 
 public:
-	virtual void IsDependentOn(SmartStack<IThreadSafeObject*>& ref_dependencies) const = 0;
-	virtual void IsConstDependentOn(SmartStack<const IThreadSafeObject*>& ref_dependencies) const = 0;
+	virtual void IsDependentOn(Container<IThreadSafeObject*>& ref_dependencies) const = 0;
+	virtual void IsConstDependentOn(Container<const IThreadSafeObject*>& ref_dependencies) const = 0;
 };
+
+struct ContainerFunc
+{
+	template<typename T, typename U>
+	static void Insert(SmartStack<T>& dst, const vector<U>& src)
+	{
+		dst.Insert(src.begin(), src.end());
+	}
+
+	template<typename T, typename U>
+	static void Insert(vector<T>& dst, const vector<U>& src)
+	{
+		dst.reserve(dst.size() + src.size());
+		dst.insert(dst.end(), src.begin(), src.end());
+	}
+
+	template<typename T, typename U>
+	static void Merge(SmartStack<T>& merge_to, SmartStack<U>& merge_from)
+	{
+		SmartStack<T>::UnorderedMerge(merge_to, merge_from);
+	}
+
+	template<typename T, typename U>
+	static void Merge(vector<T>& merge_to, vector<U>& merge_from)
+	{
+		Insert(merge_to, merge_from);
+		merge_from.clear();
+	}
+};
+
 
 struct Cluster
 {
-	SmartStack<IThreadSafeObject*> objects_;			  //no duplicates
-	SmartStack<const IThreadSafeObject*> const_dependencies_; //with duplicates
+	Container<IThreadSafeObject*> objects_;			  //no duplicates
+	Container<const IThreadSafeObject*> const_dependencies_; //with duplicates
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
 	int index_in_clusters_vec_ = -1;
@@ -51,7 +84,7 @@ private:
 			TestStuff::cluster_in_obj_overwritten++;
 #endif //TEST_STUFF
 		}
-		SmartStack<IThreadSafeObject*>::UnorderedMerge(main_cluster.objects_, objects_);
+		ContainerFunc::Merge(main_cluster.objects_, objects_);
 		//SmartStack<const IThreadSafeObject*>::UnorderedMerge(main_cluster.const_dependencies_, const_dependencies_);
 		//At this stage const_dependencies_clusters_ are not generated yet
 	}
@@ -75,8 +108,8 @@ private:
 	static Cluster* GatherObjects(Cluster* new_cluster, IThreadSafeObject* in_obj, vector<Cluster*>& clusters)
 	{
 		Cluster* actual_cluster = new_cluster;
-		SmartStack<IThreadSafeObject*> objects_to_handle;
-		SmartStack<const IThreadSafeObject*> local_const_dependencies;
+		Container<IThreadSafeObject*> objects_to_handle;
+		Container<const IThreadSafeObject*> local_const_dependencies;
 		objects_to_handle.push_back(in_obj);
 		while (!objects_to_handle.empty())
 		{
@@ -89,12 +122,12 @@ private:
 				obj->IsDependentOn(objects_to_handle);
 				obj->IsConstDependentOn(local_const_dependencies);
 #ifdef TEST_STUFF 
-				TestStuff::max_num_objects_to_handle = std::max(objects_to_handle.size(), TestStuff::max_num_objects_to_handle);
+				TestStuff::max_num_objects_to_handle = std::max<size_t>(objects_to_handle.size(), TestStuff::max_num_objects_to_handle);
 #endif //TEST_STUFF	
 			}
 			else if (obj->cluster_ != actual_cluster)
 			{
-				SmartStack<const IThreadSafeObject*>::UnorderedMerge(obj->cluster_->const_dependencies_, local_const_dependencies);
+				ContainerFunc::Merge(obj->cluster_->const_dependencies_, local_const_dependencies);
 
 				const bool use_new_cluster = obj->cluster_->objects_.size() > actual_cluster->objects_.size();
 				Cluster* to_merge = use_new_cluster ? actual_cluster : obj->cluster_;
@@ -106,7 +139,7 @@ private:
 			}
 		}
 
-		SmartStack<const IThreadSafeObject*>::UnorderedMerge(actual_cluster->const_dependencies_, local_const_dependencies);
+		ContainerFunc::Merge(actual_cluster->const_dependencies_, local_const_dependencies);
 		return actual_cluster;
 	}
 
@@ -178,7 +211,7 @@ public:
 			{
 				Assert(obj && obj->cluster_ == cluster);
 
-				SmartStack<IThreadSafeObject*> dependencies;
+				Container<IThreadSafeObject*> dependencies;
 				obj->IsDependentOn(dependencies);
 				for (auto dep : dependencies)
 				{
