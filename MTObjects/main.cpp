@@ -189,19 +189,17 @@ void main()
 {
 	const bool read_user_input = false;
 
-/*
 #ifdef TEST_STUFF 
 	int num_objects = 64 * 1024;
 	int forced_clusters = 64;
 	int dependencies_num = 4;
 	int const_dependencies_num = 1;
 #else
-*/
 	int num_objects = 1024 * 1024;
 	int forced_clusters = 1024;
 	int dependencies_num = 4;
 	int const_dependencies_num = 1;
-//#endif
+#endif
 
 	bool verbose = false;
 	bool test_group = false;
@@ -250,6 +248,6 @@ void main()
 	std::cout << "objects_to_handle: " << TestStuff::max_num_objects_to_handle << std::endl;
 	TestStuff::cluster_in_obj_overwritten = 0;
 #endif //TEST_STUFF
-	getchar();
-	getchar();
+	auto dummy = getchar();
+	dummy = getchar();
 }

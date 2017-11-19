@@ -27,18 +27,18 @@ public:
 struct Cluster
 {
 	SmartStack<IThreadSafeObject*> objects_;			  //no duplicates
-
 	SmartStack<const IThreadSafeObject*> const_dependencies_; //with duplicates
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
-	int index = -1;
+	int index_in_clusters_vec_ = -1;
+	int index_in_objects_;
 
 	void Reset()
 	{
 		objects_.clear();
 		const_dependencies_.clear();
 
-		index = -1;
+		index_in_clusters_vec_ = -1;
 	}
 
 	Cluster()
@@ -64,7 +64,7 @@ private:
 
 	static void RemoveCluster(vector<Cluster*> &clusters, const Cluster* cluster)
 	{
-		const int index_to_reuse = cluster->index;
+		const int index_to_reuse = cluster->index_in_clusters_vec_;
 		if (index_to_reuse != -1)
 		{
 			const auto last_index = clusters.size() - 1;
@@ -72,7 +72,7 @@ private:
 			{
 				Cluster* const moved_cluster = clusters[last_index];
 				clusters[index_to_reuse] = moved_cluster;
-				moved_cluster->index = index_to_reuse;
+				moved_cluster->index_in_clusters_vec_ = index_to_reuse;
 			}
 			clusters.pop_back();
 		}
@@ -132,7 +132,7 @@ private:
 			Cluster* acltual_cluster = GatherObjects(new_cluster, all_objects[first_remaining_obj_index], clusters);
 			if (acltual_cluster == new_cluster)
 			{
-				new_cluster->index = static_cast<int>(clusters.size());
+				new_cluster->index_in_clusters_vec_ = static_cast<int>(clusters.size());
 				clusters.emplace_back(new_cluster);
 				cluster_counter++;
 #ifdef TEST_STUFF 

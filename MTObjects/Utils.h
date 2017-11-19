@@ -4,9 +4,11 @@
 #include <array>
 #include <bitset>
 #include <intrin.h> 
+#include <cstring>
+#include <algorithm>
 
 #ifndef TEST_STUFF
-#define TEST_STUFF
+//#define TEST_STUFF
 #endif
 
 #ifdef TEST_STUFF 
@@ -44,6 +46,9 @@ namespace MTObjects
 			{
 				previous_chunk_ = nullptr;
 				next_chunk_ = nullptr;
+#ifdef TEST_STUFF 
+				std::memset(memory_, 0xEEEE, kStoragePerChunk);
+#endif //TEST_STUFF
 			}
 
 			unsigned char* GetMemory()
@@ -265,7 +270,9 @@ namespace MTObjects
 			Assert(!empty());
 			number_of_elements_in_last_chunk_--;
 			(ElementsInLastChunk() + number_of_elements_in_last_chunk_)->~T();
-
+#ifdef TEST_STUFF 
+			std::memset((ElementsInLastChunk() + number_of_elements_in_last_chunk_), 0xEEEE, sizeof(T));
+#endif //TEST_STUFF
 			if (0 == number_of_elements_in_last_chunk_)
 			{
 				ReleaseLastChunk();
@@ -274,14 +281,30 @@ namespace MTObjects
 
 		void clear()
 		{
-			while (number_chunks_)
+			if constexpr (std::is_pod<T>::value)
 			{
-				pop_back();
+				for (auto chunk = first_chunk_; chunk;)
+				{
+					auto temo_ptr = chunk;
+					chunk = chunk->next_chunk_;
+					SmartStackStuff::DataChunkMemoryPool64::instance.Release(temo_ptr);
+				}
+				first_chunk_ = nullptr;
+				last_chunk_ = nullptr;
+				number_chunks_ = 0;
+				number_of_elements_in_last_chunk_ = kElementsPerChunk;
 			}
-			Assert(first_chunk_ == nullptr);
-			Assert(last_chunk_ == nullptr);
-			Assert(number_chunks_ == 0);
-			Assert(number_of_elements_in_last_chunk_ == kElementsPerChunk);
+			else
+			{
+				while (number_chunks_)
+				{
+					pop_back();
+				}
+				Assert(first_chunk_ == nullptr);
+				Assert(last_chunk_ == nullptr);
+				Assert(number_chunks_ == 0);
+				Assert(number_of_elements_in_last_chunk_ == kElementsPerChunk);
+			}
 		}
 
 	public:
@@ -427,20 +450,57 @@ namespace MTObjects
 				// Move some elements from last chunk
 				const int num_free_slots_in_last_chunk_dst = kElementsPerChunk - dst.number_of_elements_in_last_chunk_;
 				const int num_elements_to_move = std::min(num_free_slots_in_last_chunk_dst, src.number_of_elements_in_last_chunk_);
-				for (int i = 0; i < num_elements_to_move; i++)
+				if constexpr(std::is_pod<T>::value)
 				{
-					dst.push_back(src.back());
-					src.pop_back();
+					if (num_elements_to_move)
+					{
+						const unsigned int remaining_elements_in_last_chunk_src = src.number_of_elements_in_last_chunk_ - num_elements_to_move;
+						std::memcpy(&dst.ElementsInLastChunk()[dst.number_of_elements_in_last_chunk_]
+							, &src.ElementsInLastChunk()[remaining_elements_in_last_chunk_src]
+							, num_elements_to_move * sizeof(T));
+						dst.number_of_elements_in_last_chunk_ += num_elements_to_move;
+						src.number_of_elements_in_last_chunk_ -= num_elements_to_move;
+						if (0 == src.number_of_elements_in_last_chunk_)
+						{
+							src.ReleaseLastChunk();
+						}
+#ifdef TEST_STUFF 
+						else
+						{
+							std::memset(&src.ElementsInLastChunk()[remaining_elements_in_last_chunk_src], 0xEEEE, sizeof(T) * (kElementsPerChunk - remaining_elements_in_last_chunk_src));
+						}
+#endif //TEST_STUFF
+					}
+				}
+				else
+				{
+					for (int i = 0; i < num_elements_to_move; i++)
+					{
+						dst.push_back(src.back());
+						src.pop_back();
+					}
 				}
 
 				if (src.empty()) { return; }
+				
 				//Re-bind chunks
-				dst.last_chunk_->next_chunk_ = src.first_chunk_;
-				src.first_chunk_->previous_chunk_ = dst.last_chunk_;
-				dst.last_chunk_ = src.last_chunk_;
+				//last chunk in dst or in src is full
+				Assert(dst.number_of_elements_in_last_chunk_ == kElementsPerChunk || src.number_of_elements_in_last_chunk_ == kElementsPerChunk);
+				if (dst.number_of_elements_in_last_chunk_ == kElementsPerChunk)
+				{	//src goes last
+					dst.last_chunk_->next_chunk_ = src.first_chunk_;
+					src.first_chunk_->previous_chunk_ = dst.last_chunk_;
+					dst.last_chunk_ = src.last_chunk_;
 
+					dst.number_of_elements_in_last_chunk_ = src.number_of_elements_in_last_chunk_;
+				}
+				else
+				{	//src goes first
+					src.last_chunk_->next_chunk_ = dst.first_chunk_;
+					dst.first_chunk_->previous_chunk_ = src.last_chunk_;
+					dst.first_chunk_ = src.first_chunk_;
+				}
 				dst.number_chunks_ += src.number_chunks_;
-				dst.number_of_elements_in_last_chunk_ = src.number_of_elements_in_last_chunk_;
 			}
 			src.first_chunk_ = nullptr;
 			src.last_chunk_ = nullptr;
