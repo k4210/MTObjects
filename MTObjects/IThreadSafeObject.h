@@ -3,7 +3,7 @@
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
-#include <deque>
+#include <set>
 
 #include "Utils.h"
 
@@ -11,7 +11,7 @@ namespace MTObjects
 {
 using std::unordered_set;
 using std::vector;
-using std::deque;
+using std::set;
 
 struct IThreadSafeObject
 {
@@ -31,7 +31,6 @@ struct Cluster
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
 	int index_in_clusters_vec_ = -1;
-	int index_in_objects_;
 
 	void Reset()
 	{
@@ -39,11 +38,6 @@ struct Cluster
 		const_dependencies_.clear();
 
 		index_in_clusters_vec_ = -1;
-	}
-
-	Cluster()
-	{
-		Reset();
 	}
 
 private:
@@ -92,12 +86,11 @@ private:
 			{
 				actual_cluster->objects_.push_back(obj);
 				obj->cluster_ = actual_cluster;
-				obj->IsConstDependentOn(local_const_dependencies);
 				obj->IsDependentOn(objects_to_handle);
+				obj->IsConstDependentOn(local_const_dependencies);
 #ifdef TEST_STUFF 
 				TestStuff::max_num_objects_to_handle = std::max(objects_to_handle.size(), TestStuff::max_num_objects_to_handle);
-#endif //TEST_STUFF
-				
+#endif //TEST_STUFF	
 			}
 			else if (obj->cluster_ != actual_cluster)
 			{
@@ -117,7 +110,7 @@ private:
 		return actual_cluster;
 	}
 
-	static void CreateClusters(const vector<IThreadSafeObject *> &all_objects, vector<Cluster*> &clusters, deque<Cluster>& preallocated_clusters)
+	static void CreateClusters(const vector<IThreadSafeObject *> &all_objects, vector<Cluster*> &clusters, vector<Cluster>& preallocated_clusters)
 	{
 		unsigned int cluster_counter = 0;
 		for(unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
@@ -147,13 +140,12 @@ private:
 		for (auto cluster : clusters)
 		{
 			cluster->const_dependencies_clusters_.clear();
-			cluster->const_dependencies_clusters_.reserve(cluster->const_dependencies_.size());
-			//Generate cluster dependencies. It can be done, only when all objects have cluster set.
-			for (auto const_dep : cluster->const_dependencies_)
-			{
-				cluster->const_dependencies_clusters_.emplace(const_dep->cluster_);
-			}
+			std::transform(cluster->const_dependencies_.begin(), cluster->const_dependencies_.end(), std::inserter(cluster->const_dependencies_clusters_, cluster->const_dependencies_clusters_.begin()),
+				[](const IThreadSafeObject* o) { return o->cluster_; });
 			cluster->const_dependencies_clusters_.erase(cluster);
+
+			cluster->const_dependencies_.clear();
+
 		}
 	}
 
@@ -167,7 +159,7 @@ public:
 		}
 	}
 
-	static vector<Cluster*> GenerateClusters(const vector<IThreadSafeObject*>& all_objects, deque<Cluster>& preallocated_clusters)
+	static vector<Cluster*> GenerateClusters(const vector<IThreadSafeObject*>& all_objects, vector<Cluster>& preallocated_clusters)
 	{
 		vector<Cluster*> clusters;
 		clusters.reserve(preallocated_clusters.size());
@@ -238,7 +230,7 @@ struct GroupOfConcurrentClusters : public vector<Cluster*>
 
 		vector<GroupOfConcurrentClusters> groups;
 		groups.reserve(clusters.size());
-		groups.resize(std::max<size_t>(1, clusters.size() / 32));
+		groups.resize(1); //groups.resize(std::max<size_t>(1, clusters.size() / 32));
 		size_t cluster_index = 0;
 		for (auto cluster : clusters)
 		{

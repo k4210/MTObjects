@@ -33,7 +33,7 @@ namespace MTObjects
 	namespace SmartStackStuff
 	{
 		static const constexpr unsigned int kCacheLineSize = 64; // == 16 * sizeof(int) == 8 * sizeof(*int)
-		static const constexpr unsigned int kCacheLinesPerChunk = 48;
+		static const constexpr unsigned int kCacheLinesPerChunk = 20;
 		struct DataChunk
 		{
 			static const constexpr unsigned int kStoragePerChunk = (kCacheLinesPerChunk * kCacheLineSize) - (2 * sizeof(DataChunk*));
@@ -60,18 +60,39 @@ namespace MTObjects
 
 		struct DataChunkMemoryPool64
 		{
-			static const constexpr int kBitsetSize = 64;
-			static const constexpr int kRangeNum = 128;
+			static const constexpr int kBitsetSize = 64; //size of range
+			static const constexpr int kRangeNum = 64;
 			static const constexpr int kNumberChunks = kBitsetSize * kRangeNum;
 
 			struct ExtendedBitset
 			{
-				std::array<std::bitset<kBitsetSize>, 2> bitsets_;
+				std::bitset<kBitsetSize> bs_;
 
 				static bool FirstZeroInBitset(const std::bitset<kBitsetSize>& bitset, unsigned long& out_index)
 				{
 					return 0 != _BitScanForward64(&out_index, ~bitset.to_ullong());
 				}
+
+				bool Test(unsigned int i) const
+				{
+					return bs_[i];
+				}
+
+				void Set(unsigned int i, bool value)
+				{
+					bs_[i] = value;
+				}
+
+				unsigned int FirstZeroIndex() const
+				{
+					unsigned long result = 0;
+					const bool ok = FirstZeroInBitset(bs_, result);
+					Assert(ok);
+					return result;
+				}
+/*
+
+				std::array<std::bitset<kBitsetSize>, 2> bitsets_;
 
 				unsigned int FirstZeroIndex() const
 				{
@@ -96,6 +117,7 @@ namespace MTObjects
 				{
 					bitsets_[i / kBitsetSize][i % kBitsetSize] = value;
 				}
+				*/
 			};
 
 		private:

@@ -7,7 +7,6 @@
 
 using namespace MTObjects;
 using std::vector;
-using std::deque;
 
 #ifdef TEST_STUFF 
 unsigned int TestStuff::cluster_in_obj_overwritten;
@@ -22,29 +21,20 @@ class TestObject : public IThreadSafeObject
 {
 public:
 	vector<TestObject*> dependencies_;
-	int fake_data[31];
 	vector<const TestObject*> const_dependencies_;
+
+	int fake_data[31];
 
 	int id_ = -1;
 
 	void IsDependentOn(SmartStack<IThreadSafeObject*>& ref_dependencies) const override
 	{
-		for (auto dep : dependencies_)
-		{
-			ref_dependencies.push_back(dep);
-		}
-		//TODO:
-		//ref_dependencies.insert_back(dependencies_.begin(), dependencies_.end());
+		ref_dependencies.Insert(dependencies_.begin(), dependencies_.end());
 	}
 
 	void IsConstDependentOn(SmartStack<const IThreadSafeObject*>& ref_dependencies) const override
 	{
-		for (auto dep : const_dependencies_)
-		{
-			ref_dependencies.push_back(dep);
-		}
-		//TODO:
-		//ref_dependencies.insert(ref_dependencies.end(), const_dependencies_.begin(), const_dependencies_.end());
+		ref_dependencies.Insert(const_dependencies_.begin(), const_dependencies_.end());
 	}
 
 	void Task()
@@ -75,20 +65,40 @@ static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_n
 		obj.id_ = i;
 		if (use_forced_clusters)
 		{
-			std::uniform_int_distribution<int> cluster_distribution(0, forced_clusters_num - 1);
-			const int forced_cluster_idx = cluster_distribution(generator);
-			vector<TestObject*>& cluster = forced_clusters[forced_cluster_idx];
-			const size_t actual_dependency_num = std::min<size_t>(dependencies_num, cluster.size());
-			if (actual_dependency_num > 0)
 			{
-				std::uniform_int_distribution<size_t> dependency_distribution(0, cluster.size() - 1);
-				for (int j = 0; j < dependencies_num; j++)
+				std::uniform_int_distribution<int> cluster_distribution(0, forced_clusters_num - 1);
+				const int forced_cluster_idx = cluster_distribution(generator);
+				vector<TestObject*>& cluster = forced_clusters[forced_cluster_idx];
+				const size_t actual_dependency_num = std::min<size_t>(dependencies_num, cluster.size());
+				if (actual_dependency_num > 0)
 				{
-					auto dep_obj = cluster[dependency_distribution(generator)];
-					obj.dependencies_.emplace_back(dep_obj);
+					std::uniform_int_distribution<size_t> dependency_distribution(0, cluster.size() - 1);
+					for (int j = 0; j < dependencies_num; j++)
+					{
+						auto dep_obj = cluster[dependency_distribution(generator)];
+						obj.dependencies_.emplace_back(dep_obj);
+					}
+				}
+				cluster.push_back(&obj);
+			}
+
+			{
+				//Const deps goes only to the first num_of_const_dep_sources clusters
+				const int num_of_const_dep_sources = 8;
+				std::uniform_int_distribution<size_t> const_dep_source_dependency_distribution(0, num_of_const_dep_sources);
+				const int forced_cluster_idx = const_dep_source_dependency_distribution(generator);
+				const vector<TestObject*>& cluster = forced_clusters[forced_cluster_idx];
+				const size_t actual_dependency_num = std::min<size_t>(const_dependencies_num, cluster.size());
+				if (actual_dependency_num > 0)
+				{
+					std::uniform_int_distribution<size_t> dependency_distribution(0, cluster.size() - 1);
+					for (int j = 0; j < const_dependencies_num; j++)
+					{
+						auto dep_obj = cluster[dependency_distribution(generator)];
+						obj.const_dependencies_.emplace_back(dep_obj);
+					}
 				}
 			}
-			cluster.push_back(&obj);
 		}
 		else
 		{
@@ -98,12 +108,10 @@ static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_n
 				auto dep_obj = &vec_obj[dependency_distribution(generator)];
 				obj.dependencies_.emplace_back(dep_obj);
 			}
-		}
-		{
-			std::uniform_int_distribution<int> const_dependency_distribution(0, num_objects - 1);
+
 			for (int j = 0; j < const_dependencies_num; j++)
 			{
-				auto const_dep_obj = &vec_obj[const_dependency_distribution(generator)];
+				auto const_dep_obj = &vec_obj[dependency_distribution(generator)];
 				obj.const_dependencies_.emplace_back(const_dep_obj);
 			}
 		}
@@ -130,19 +138,22 @@ static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject>& vec_obj)
 
 static long long Test(vector<IThreadSafeObject*> all_objects, bool test_group, bool verbose)
 {
-	deque<Cluster> preallocated_clusters(all_objects.size() / 2);
+	vector<Cluster> preallocated_clusters(all_objects.size() / 64);
 
 	std::cout << std::endl;
+	vector<Cluster*> clusters;
+	long long ms = 0;
 
-	std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
-	Cluster::ClearClustersInObjects(all_objects);
-	const vector<Cluster*> clusters = Cluster::GenerateClusters(all_objects, preallocated_clusters);
-	std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
-	std::chrono::system_clock::duration duration = time_1 - time_0;
-	auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-	std::cout << "GenerateClusters [ms]: " << ms << std::endl;
-	std::cout << "clusters: " << clusters.size();
-
+	{
+		std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
+		Cluster::ClearClustersInObjects(all_objects);
+		clusters = Cluster::GenerateClusters(all_objects, preallocated_clusters);
+		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
+		std::chrono::system_clock::duration duration = time_1 - time_0;
+		ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+		std::cout << "GenerateClusters [ms]: " << ms << std::endl;
+		std::cout << "clusters: " << clusters.size();
+	}
 	if (verbose)
 	{
 		std::cout << " : ";
@@ -162,7 +173,11 @@ static long long Test(vector<IThreadSafeObject*> all_objects, bool test_group, b
 		std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
 		const vector<GroupOfConcurrentClusters> groups = GroupOfConcurrentClusters::GenerateClusterGroups(clusters);
 		std::chrono::system_clock::time_point time_3 = std::chrono::system_clock::now();
-		std::cout << "GenerateClusterGroups [ms]: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_3 - time_2).count() << std::endl;
+
+		std::chrono::system_clock::duration duration = time_3 - time_2;
+		auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+		ms += duration_ms;
+		std::cout << "GenerateClusterGroups [ms]: " << duration_ms << std::endl;
 		std::cout << "groups: " << groups.size() << std::endl;
 		if (verbose)
 		{
@@ -189,22 +204,20 @@ void main()
 {
 	const bool read_user_input = false;
 
-#ifdef TEST_STUFF 
 	int num_objects = 64 * 1024;
 	int forced_clusters = 64;
-	int dependencies_num = 4;
-	int const_dependencies_num = 1;
+	int dependencies_num = 16;
+	int const_dependencies_num = 8;
+
+#ifdef TEST_STUFF 
+	bool verbose = true;
+	int repeat_test = 1;
 #else
-	int num_objects = 1024 * 1024;
-	int forced_clusters = 1024;
-	int dependencies_num = 4;
-	int const_dependencies_num = 1;
+	bool verbose = false;
+	int repeat_test = 32;
 #endif
 
-	bool verbose = false;
-	bool test_group = false;
-	int repeat_test = 16;
-
+	bool test_group = true;
 	if (read_user_input)
 	{
 		std::cout << "num_objects: ";
@@ -229,12 +242,12 @@ void main()
 	auto objects = GenerateObjects(num_objects, forced_clusters, dependencies_num, const_dependencies_num, generator);
 	auto shuffled_objects = ShuffleObjects(objects);
 
-	long long all_time = 0;
+	long long all_time_ns = 0;
 	for (int i = 0; i < repeat_test; i++)
 	{
 		std::cout << "Test: " << i << std::endl;
 
-		all_time += Test(shuffled_objects, test_group, verbose);
+		all_time_ns += Test(shuffled_objects, test_group, verbose);
 #ifdef TEST_STUFF 
 		std::cout << "cluster_in_obj_overwritten: " << TestStuff::cluster_in_obj_overwritten << std::endl;
 		TestStuff::cluster_in_obj_overwritten = 0;
@@ -243,11 +256,10 @@ void main()
 #endif //TEST_STUFF
 		std::cout << std::endl;
 	}
-	std::cout << "Average time [ms]: " << all_time / repeat_test << std::endl;
+	std::cout << "Average time [ns]: " << all_time_ns / repeat_test << std::endl;
 #ifdef TEST_STUFF 
 	std::cout << "objects_to_handle: " << TestStuff::max_num_objects_to_handle << std::endl;
 	TestStuff::cluster_in_obj_overwritten = 0;
 #endif //TEST_STUFF
 	auto dummy = getchar();
-	dummy = getchar();
 }
