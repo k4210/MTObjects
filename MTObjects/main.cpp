@@ -27,13 +27,13 @@ public:
 
 	int id_ = -1;
 
-	void IsDependentOn(Container<IThreadSafeObject*>& ref_dependencies) const override
+	void IsDependentOn(FastContainer<IThreadSafeObject*>& ref_dependencies) const override
 	{
 		ContainerFunc::Insert(ref_dependencies, dependencies_);
 		//ref_dependencies.Insert(dependencies_.begin(), dependencies_.end());
 	}
 
-	void IsConstDependentOn(Container<const IThreadSafeObject*>& ref_dependencies) const override
+	void IsConstDependentOn(FastContainer<const IThreadSafeObject*>& ref_dependencies) const override
 	{
 		ContainerFunc::Insert(ref_dependencies, const_dependencies_);
 		//ref_dependencies.Insert(const_dependencies_.begin(), const_dependencies_.end());
@@ -219,7 +219,7 @@ void main()
 	int repeat_test = 32;
 #endif
 
-	bool test_group = true;
+	bool test_group = false;
 	if (read_user_input)
 	{
 		std::cout << "num_objects: ";

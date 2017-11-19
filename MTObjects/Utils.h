@@ -6,6 +6,7 @@
 #include <intrin.h> 
 #include <cstring>
 #include <algorithm>
+#include <vector>
 
 #ifndef TEST_STUFF
 //#define TEST_STUFF
@@ -20,6 +21,8 @@
 
 namespace MTObjects
 {
+	using std::vector;
+
 #ifdef TEST_STUFF 
 	struct TestStuff
 	{
@@ -540,4 +543,32 @@ namespace MTObjects
 		}
 	};
 
+	struct ContainerFunc
+	{
+		template<typename T, typename U>
+		static void Insert(SmartStack<T>& dst, const vector<U>& src)
+		{
+			dst.Insert(src.begin(), src.end());
+		}
+
+		template<typename T, typename U>
+		static void Insert(vector<T>& dst, const vector<U>& src)
+		{
+			dst.reserve(dst.size() + src.size());
+			dst.insert(dst.end(), src.begin(), src.end());
+		}
+
+		template<typename T, typename U>
+		static void Merge(SmartStack<T>& merge_to, SmartStack<U>& merge_from)
+		{
+			SmartStack<T>::UnorderedMerge(merge_to, merge_from);
+		}
+
+		template<typename T, typename U>
+		static void Merge(vector<T>& merge_to, vector<U>& merge_from)
+		{
+			Insert(merge_to, merge_from);
+			merge_from.clear();
+		}
+	};
 }

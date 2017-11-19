@@ -1,20 +1,18 @@
 #pragma once
 
 #include <unordered_set>
-#include <vector>
 #include <algorithm>
-#include <set>
-
+//#include <execution>
+#include <ppl.h>
 #include "Utils.h"
 
 namespace MTObjects
 {
 using std::unordered_set;
-using std::vector;
-using std::set;
 
 template<typename T>
-using Container = SmartStack<T>;
+//using FastContainer = vector<T, std::pmr::polymorphic_allocator>;
+using FastContainer = SmartStack<T>;
 
 struct IThreadSafeObject
 {
@@ -23,44 +21,14 @@ private:
 	Cluster* cluster_ = nullptr;
 
 public:
-	virtual void IsDependentOn(Container<IThreadSafeObject*>& ref_dependencies) const = 0;
-	virtual void IsConstDependentOn(Container<const IThreadSafeObject*>& ref_dependencies) const = 0;
+	virtual void IsDependentOn(FastContainer<IThreadSafeObject*>& ref_dependencies) const = 0;
+	virtual void IsConstDependentOn(FastContainer<const IThreadSafeObject*>& ref_dependencies) const = 0;
 };
-
-struct ContainerFunc
-{
-	template<typename T, typename U>
-	static void Insert(SmartStack<T>& dst, const vector<U>& src)
-	{
-		dst.Insert(src.begin(), src.end());
-	}
-
-	template<typename T, typename U>
-	static void Insert(vector<T>& dst, const vector<U>& src)
-	{
-		dst.reserve(dst.size() + src.size());
-		dst.insert(dst.end(), src.begin(), src.end());
-	}
-
-	template<typename T, typename U>
-	static void Merge(SmartStack<T>& merge_to, SmartStack<U>& merge_from)
-	{
-		SmartStack<T>::UnorderedMerge(merge_to, merge_from);
-	}
-
-	template<typename T, typename U>
-	static void Merge(vector<T>& merge_to, vector<U>& merge_from)
-	{
-		Insert(merge_to, merge_from);
-		merge_from.clear();
-	}
-};
-
 
 struct Cluster
 {
-	Container<IThreadSafeObject*> objects_;			  //no duplicates
-	Container<const IThreadSafeObject*> const_dependencies_; //with duplicates
+	FastContainer<IThreadSafeObject*> objects_;			  //no duplicates
+	FastContainer<const IThreadSafeObject*> const_dependencies_; //with duplicates
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
 	int index_in_clusters_vec_ = -1;
@@ -108,8 +76,8 @@ private:
 	static Cluster* GatherObjects(Cluster* new_cluster, IThreadSafeObject* in_obj, vector<Cluster*>& clusters)
 	{
 		Cluster* actual_cluster = new_cluster;
-		Container<IThreadSafeObject*> objects_to_handle;
-		Container<const IThreadSafeObject*> local_const_dependencies;
+		FastContainer<IThreadSafeObject*> objects_to_handle;
+		FastContainer<const IThreadSafeObject*> local_const_dependencies;
 		objects_to_handle.push_back(in_obj);
 		while (!objects_to_handle.empty())
 		{
@@ -170,16 +138,16 @@ private:
 
 	static void CreateClustersDependencies(const vector<Cluster*>& clusters)
 	{
-		for (auto cluster : clusters)
-		{
+		//std::for_each(std::execution::par_unseq,
+		concurrency::parallel_for_each(
+			std::begin(clusters), std::end(clusters),
+		[](Cluster* cluster){
 			cluster->const_dependencies_clusters_.clear();
 			std::transform(cluster->const_dependencies_.begin(), cluster->const_dependencies_.end(), std::inserter(cluster->const_dependencies_clusters_, cluster->const_dependencies_clusters_.begin()),
 				[](const IThreadSafeObject* o) { return o->cluster_; });
 			cluster->const_dependencies_clusters_.erase(cluster);
-
 			cluster->const_dependencies_.clear();
-
-		}
+		});
 	}
 
 public:
@@ -211,7 +179,7 @@ public:
 			{
 				Assert(obj && obj->cluster_ == cluster);
 
-				Container<IThreadSafeObject*> dependencies;
+				FastContainer<IThreadSafeObject*> dependencies;
 				obj->IsDependentOn(dependencies);
 				for (auto dep : dependencies)
 				{
