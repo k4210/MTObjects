@@ -24,6 +24,7 @@ namespace MTObjects
 	using std::vector;
 
 	typedef unsigned short TIndex;
+	static const constexpr TIndex kNullIndex = 0xFFFF;
 
 #ifdef TEST_STUFF 
 	struct TestStuff
@@ -210,8 +211,6 @@ namespace MTObjects
 	{
 		static_assert(SmartStackStuff::DataChunk::kStoragePerChunk >= sizeof(T), "too big T");
 		static const constexpr unsigned int kElementsPerChunk = SmartStackStuff::DataChunk::kStoragePerChunk / sizeof(T);
-
-		static const constexpr TIndex kNullIndex= 0xFFFF;
 
 		TIndex first_chunk_ = kNullIndex;
 		TIndex last_chunk_ = kNullIndex;
@@ -483,6 +482,39 @@ namespace MTObjects
 		{
 			clear();
 		}
+
+		SmartStack(SmartStack&& other)
+		{
+			first_chunk_ = other.first_chunk_;
+			last_chunk_ = other.last_chunk_;
+			number_chunks_ = other.number_chunks_;
+			number_of_elements_in_last_chunk_ = other.number_of_elements_in_last_chunk_;
+
+			other.first_chunk_ = kNullIndex;
+			other.last_chunk_ = kNullIndex;
+			other.number_chunks_ = 0;
+			other.number_of_elements_in_last_chunk_ = kElementsPerChunk;
+		}
+
+		SmartStack& operator=(SmartStack&& other)
+		{
+			if (this != &other)
+			{
+				clear();
+
+				first_chunk_ = other.first_chunk_;
+				last_chunk_ = other.last_chunk_;
+				number_chunks_ = other.number_chunks_;
+				number_of_elements_in_last_chunk_ = other.number_of_elements_in_last_chunk_;
+
+				other.first_chunk_ = kNullIndex;
+				other.last_chunk_ = kNullIndex;
+				other.number_chunks_ = 0;
+				other.number_of_elements_in_last_chunk_ = kElementsPerChunk;
+			}
+			return *this;
+		}
+
 
 		static void UnorderedMerge(SmartStack& dst, SmartStack& src)
 		{

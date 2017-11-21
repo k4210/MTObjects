@@ -33,12 +33,12 @@ public:
 		//ref_dependencies.Insert(dependencies_.begin(), dependencies_.end());
 	}
 
-	void IsConstDependentOn(unordered_set<const Cluster*>& ref_dependencies) const override
+	void IsConstDependentOn(unordered_set<const Cluster*>& ref_dependencies, const vector<Cluster>& clusters) const override
 	{
 		//ContainerFunc::Insert(ref_dependencies, const_dependencies_);
 		//ref_dependencies.insert(const_dependencies_.begin(), const_dependencies_.end());
 		std::transform(const_dependencies_.begin(), const_dependencies_.end(), std::inserter(ref_dependencies, ref_dependencies.begin()),
-			[](const IThreadSafeObject* o) { return o->cluster_; });
+			[&](const IThreadSafeObject* o) { return &clusters[o->cluster_]; });
 	}
 
 	void Task() override
@@ -140,30 +140,38 @@ static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject>& vec_obj)
 	return all_objects;
 }
 
-static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& preallocated_clusters, bool test_group, bool verbose)
+static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& clusters, bool test_group, bool verbose)
 {
 	std::cout << std::endl;
-	vector<Cluster*> clusters;
 	long long ms = 0;
 
 	{
 		std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
 
-		clusters = Cluster::GenerateClusters(all_objects, preallocated_clusters);
+		clusters.clear();
+		Cluster::CreateClusters(all_objects, clusters);
 
 		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
 		std::chrono::system_clock::duration duration = time_1 - time_0;
 		ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-		std::cout << "GenerateClusters [ms]: " << ms << std::endl;
-		std::cout << "clusters: " << clusters.size();
-	}
-	if (verbose)
-	{
-		std::cout << " : ";
-		for (auto cluster : clusters)
+		std::cout << "GenerateClusters [ms]: " << ms << std::endl << " : ";
+
+		int num_empty = 0;
+		for (auto& cluster : clusters)
 		{
-			std::cout << cluster->objects_.size() << " \t";
+			if (cluster.GetObjects().empty())
+			{
+				num_empty++;
+			}
+			else if (verbose)
+			{
+				std::cout << cluster.GetObjects().size() << " \t";
+			}
 		}
+		std::cout << "AllClusters: " << clusters.size() 
+			<< " Empty: " << num_empty
+			<< " Clusters: " << (clusters.size() - num_empty)
+			<< std::endl;
 	}
 	std::cout << std::endl;
 
@@ -195,9 +203,7 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& p
 					for (unsigned int cluster_idx = 0; cluster_idx < group.clusters_.size(); cluster_idx++)
 					{
 						auto& cluster = group.clusters_[cluster_idx];
-						std::cout << cluster->objects_.size()
-							//<< "(" << cluster->const_dependencies_clusters_.size() << ")"
-							<< "\t ";
+						std::cout << cluster->GetObjects().size() << "\t ";
 					}
 					std::cout << std::endl;
 				}
@@ -212,7 +218,7 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& p
 				concurrency::parallel_for_each(group.clusters_.begin(), group.clusters_.end(), 
 					[](Cluster* cluster)
 				{
-					for (auto obj : cluster->objects_)
+					for (auto obj : cluster->GetObjects())
 					{
 						obj->Task();
 					}
