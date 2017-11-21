@@ -33,14 +33,12 @@ public:
 struct Cluster
 {
 	FastContainer<IThreadSafeObject*> objects_;			  //no duplicates
-	unordered_set<const Cluster*> const_dependencies_clusters_;
 
 	int index_in_clusters_vec_ = -1;
 
 	void Reset()
 	{
 		objects_.clear();
-		const_dependencies_clusters_.clear();
 		index_in_clusters_vec_ = -1;
 	}
 
@@ -134,31 +132,33 @@ private:
 		}
 	}
 
-	static void CreateClustersDependencies(const vector<Cluster*>& clusters)
+public:
+	static vector<unordered_set<const Cluster*>> CreateClustersDependencies(const vector<Cluster*>& clusters)
 	{
-		auto num_clusters = clusters.size();
-		//std::for_each(std::execution::par_unseq,
-		concurrency::parallel_for_each(
-			std::begin(clusters), std::end(clusters),
-		[num_clusters](Cluster* cluster){
-			cluster->const_dependencies_clusters_.clear();
-			//cluster->const_dependencies_clusters_.reserve(num_clusters);
+		const auto num_clusters = clusters.size();
+		vector<unordered_set<const Cluster*>> const_dependencies_clusters;
+		const_dependencies_clusters.resize(num_clusters);
+		
+		concurrency::parallel_for<size_t>(0, num_clusters, [&clusters, &const_dependencies_clusters](size_t idx)
+		{
+			auto cluster = clusters[idx];
+			auto& const_dependency_set = const_dependencies_clusters[idx];
 			for (auto obj : cluster->objects_)
 			{
 				Assert(obj->cluster_ == cluster);
-				obj->IsConstDependentOn(cluster->const_dependencies_clusters_);
+				obj->IsConstDependentOn(const_dependency_set);
 			}
-			cluster->const_dependencies_clusters_.erase(cluster);
+			const_dependency_set.erase(cluster);
 		});
+
+		return const_dependencies_clusters;
 	}
 
-public:
 	static vector<Cluster*> GenerateClusters(const vector<IThreadSafeObject*>& all_objects, vector<Cluster>& preallocated_clusters)
 	{
 		vector<Cluster*> clusters;
 		clusters.reserve(preallocated_clusters.size());
 		CreateClusters(all_objects, clusters, preallocated_clusters);
-		CreateClustersDependencies(clusters);
 		return clusters;
 	}
 #ifdef TEST_STUFF 
@@ -200,35 +200,32 @@ struct GroupOfConcurrentClusters
 	vector<Cluster*> clusters_;
 	unordered_set<const Cluster*> const_dependencies_clusters_;
 
-	void AddCluster(Cluster& cluster)
+	void AddCluster(Cluster& cluster, unordered_set<const Cluster*>& cluster_dependencies)
 	{
 		clusters_.emplace_back(&cluster);
-		const_dependencies_clusters_.insert(cluster.const_dependencies_clusters_.begin(), cluster.const_dependencies_clusters_.end());
+		const_dependencies_clusters_.insert(cluster_dependencies.begin(), cluster_dependencies.end());
 	}
 
 	static vector<GroupOfConcurrentClusters> GenerateClusterGroups(const vector<Cluster*>& clusters)
 	{
-		auto depends_on = [](const Cluster* a, const Cluster* b) -> bool
-		{
-			return a->const_dependencies_clusters_.end() != a->const_dependencies_clusters_.find(b);
-		};
-
-		auto fits_into_group = [&](const GroupOfConcurrentClusters& group, const Cluster* cluster) -> bool
+		auto fits_into_group = [&](const GroupOfConcurrentClusters& group, const Cluster* cluster, const unordered_set<const Cluster*>& cluster_dependencies) -> bool
 		{
 			return std::none_of(group.clusters_.begin(), group.clusters_.end(), [&](const Cluster* cluster_in_group)
 			{
-				return depends_on(cluster, cluster_in_group);
+				return cluster_dependencies.end() != cluster_dependencies.find(cluster_in_group);
 			}) 
-
 			&& group.const_dependencies_clusters_.find(cluster) == group.const_dependencies_clusters_.end();
 		};
+
+		auto dependency_sets = Cluster::CreateClustersDependencies(clusters);
 
 		vector<GroupOfConcurrentClusters> groups;
 		groups.reserve(clusters.size()/4);
 		groups.resize(1); //groups.resize(std::max<size_t>(1, clusters.size() / 32));
-		size_t cluster_index = 0;
-		for (auto cluster : clusters)
+		for (int cluster_index = 0; cluster_index < clusters.size(); ++cluster_index)
 		{
+			auto cluster = clusters[cluster_index];
+			auto& dependency_set = dependency_sets[cluster_index];
 			bool fits_in_existing_group = false;
 			{
 				const size_t group_num = groups.size();
@@ -237,9 +234,9 @@ struct GroupOfConcurrentClusters
 				{
 					const size_t group_idx = (first_group_to_try + groups_checked) % group_num;
 					auto& group = groups[group_idx];
-					if (fits_into_group(group, cluster))
+					if (fits_into_group(group, cluster, dependency_set))
 					{
-						group.AddCluster(*cluster);
+						group.AddCluster(*cluster, dependency_set);
 						fits_in_existing_group = true;
 					}
 				}
@@ -247,10 +244,9 @@ struct GroupOfConcurrentClusters
 			if (!fits_in_existing_group)
 			{
 				GroupOfConcurrentClusters new_group;
-				new_group.AddCluster(*cluster);
+				new_group.AddCluster(*cluster, dependency_set);
 				groups.emplace_back(new_group);
 			}
-			cluster_index++;
 		}
 		return groups;
 	}
