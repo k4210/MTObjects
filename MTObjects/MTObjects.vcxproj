@@ -120,7 +120,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="IThreadSafeObject.h" />
-    <ClInclude Include="SmartStack.h" />
     <ClInclude Include="Utils.h" />
   </ItemGroup>
   <ItemGroup>
