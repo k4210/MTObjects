@@ -8,13 +8,6 @@
 using namespace MTObjects;
 using std::vector;
 
-#ifdef TEST_STUFF 
-unsigned int TestStuff::cluster_in_obj_overwritten;
-std::size_t TestStuff::max_num_objects_to_handle;
-std::size_t TestStuff::max_num_clusters;
-unsigned int TestStuff::max_num_data_chunks_used;
-#endif //TEST_STUFF
-
 SmartStackStuff::DataChunkMemoryPool64 SmartStackStuff::DataChunkMemoryPool64::instance;
 
 class TestObject : public IThreadSafeObject
@@ -33,17 +26,17 @@ public:
 		//ref_dependencies.Insert(dependencies_.begin(), dependencies_.end());
 	}
 
-	void IsConstDependentOn(unordered_set<const Cluster*>& ref_dependencies, const vector<Cluster>& clusters) const override
+	void IsConstDependentOn(IndexSet& ref_dependencies) const override
 	{
-		//ContainerFunc::Insert(ref_dependencies, const_dependencies_);
-		//ref_dependencies.insert(const_dependencies_.begin(), const_dependencies_.end());
-		std::transform(const_dependencies_.begin(), const_dependencies_.end(), std::inserter(ref_dependencies, ref_dependencies.begin()),
-			[&](const IThreadSafeObject* o) { return &clusters[o->cluster_]; });
+		for (auto obj : const_dependencies_)
+		{
+			ref_dependencies[obj->GetClusterIndex()] = true;
+		}
 	}
 
 	void Task() override
 	{
-		IThreadSafeObject::Task();
+		
 	}
 };
 
@@ -140,7 +133,7 @@ static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject>& vec_obj)
 	return all_objects;
 }
 
-static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& clusters, bool test_group, bool verbose)
+static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& clusters, bool verbose)
 {
 	std::cout << std::endl;
 	long long ms = 0;
@@ -153,87 +146,90 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 
 		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
 		std::chrono::system_clock::duration duration = time_1 - time_0;
-		ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-		std::cout << "GenerateClusters [ms]: " << ms << std::endl << " : ";
+		ms = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+		std::cout << "GenerateClusters [ms]: " << ms << std::endl;
 
-		int num_empty = 0;
-		for (auto& cluster : clusters)
+		if (verbose)
 		{
-			if (cluster.GetObjects().empty())
+			std::cout << " : ";
+			int num_empty = 0;
+			for (auto& cluster : clusters)
 			{
-				num_empty++;
-			}
-			else if (verbose)
-			{
-				std::cout << cluster.GetObjects().size() << " \t";
-			}
-		}
-		std::cout << "AllClusters: " << clusters.size() 
-			<< " Empty: " << num_empty
-			<< " Clusters: " << (clusters.size() - num_empty)
-			<< std::endl;
-	}
-	std::cout << std::endl;
-
-#ifdef TEST_STUFF 
-	Cluster::Test_AreClustersCoherent(clusters);
-#endif //TEST_STUFF
-
-	if (test_group)
-	{
-		vector<GroupOfConcurrentClusters> groups;
-		{
-			std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
-
-			groups = GroupOfConcurrentClusters::GenerateClusterGroups(clusters);
-
-			std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
-			std::chrono::system_clock::duration duration = time_2 - time_1;
-			auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-			ms += duration_ms;
-			std::cout << "GenerateClusterGroups [ms]: " << duration_ms << std::endl;
-			std::cout << "groups: " << groups.size() << std::endl;
-			if (verbose)
-			{
-				for (unsigned int group_idx = 0; group_idx < groups.size(); group_idx++)
+				if (cluster.GetObjects().empty())
 				{
-					const GroupOfConcurrentClusters& group = groups[group_idx];
-					std::cout << group_idx << "[" << group.clusters_.size() << "]\t ";
-
-					for (unsigned int cluster_idx = 0; cluster_idx < group.clusters_.size(); cluster_idx++)
-					{
-						auto& cluster = group.clusters_[cluster_idx];
-						std::cout << cluster->GetObjects().size() << "\t ";
-					}
-					std::cout << std::endl;
+					num_empty++;
+				}
+				else if (verbose)
+				{
+					std::cout << cluster.GetObjects().size() << " \t";
 				}
 			}
+			std::cout << std::endl << "AllClusters: " << clusters.size()
+				<< " Empty: " << num_empty
+				<< " Clusters: " << (clusters.size() - num_empty)
+				<< std::endl;
 		}
-
-		{
-			std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
-
-			for (auto& group : groups)
-			{
-				concurrency::parallel_for_each(group.clusters_.begin(), group.clusters_.end(), 
-					[](Cluster* cluster)
-				{
-					for (auto obj : cluster->GetObjects())
-					{
-						obj->Task();
-					}
-					cluster->Reset();
-				});
-			}
-
-			std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
-			std::chrono::system_clock::duration duration = time_2 - time_1;
-			auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-			ms += duration_ms;
-			std::cout << "Execution [ms]: " << duration_ms << std::endl;
-		}
-
 	}
+
+	IF_TEST_STUFF(Cluster::Test_AreClustersCoherent(clusters));
+
+	vector<IndexSet> dependency_sets;
+	{
+		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
+
+		dependency_sets = Cluster::CreateClustersDependencies(clusters);
+
+		std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
+		std::chrono::system_clock::duration duration = time_2 - time_1;
+		auto duration_ms = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+		ms += duration_ms;
+		std::cout << "CreateClustersDependencies [ms]: " << duration_ms << std::endl;
+	}
+
+	vector<GroupOfConcurrentClusters> groups;
+	{
+		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
+
+		groups = GroupOfConcurrentClusters::GenerateClusterGroups(clusters, dependency_sets);
+
+		std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
+		std::chrono::system_clock::duration duration = time_2 - time_1;
+		auto duration_ms = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+		ms += duration_ms;
+		std::cout << "GenerateClusterGroups [ms]: " << duration_ms << std::endl;
+		if (verbose)
+		{
+			std::cout << "groups: " << groups.size() << std::endl;
+			for (unsigned int group_idx = 0; group_idx < groups.size(); group_idx++)
+			{
+				const GroupOfConcurrentClusters& group = groups[group_idx];
+				std::cout << group_idx << "[" << group.clusters_.size() << "]\t ";
+
+				for (unsigned int cluster_idx = 0; cluster_idx < group.clusters_.size(); cluster_idx++)
+				{
+					auto& cluster = group.clusters_[cluster_idx];
+					std::cout << cluster->GetObjects().size() << "\t ";
+				}
+				std::cout << std::endl;
+			}
+		}
+	}
+
+	{
+		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
+
+		for (auto& group : groups)
+		{
+			group.ExecuteGroup();
+		}
+
+		std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
+		std::chrono::system_clock::duration duration = time_2 - time_1;
+		auto duration_ms = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+		ms += duration_ms;
+		std::cout << "Execution [ms]: " << duration_ms << std::endl;
+	}
+
 	return ms;
 }
 
@@ -254,7 +250,6 @@ void main()
 	int repeat_test = 32;
 #endif
 
-	bool test_group = true;
 	if (read_user_input)
 	{
 		std::cout << "num_objects: ";
@@ -284,21 +279,11 @@ void main()
 	long long all_time_ns = 0;
 	for (int i = 0; i < repeat_test; i++)
 	{
-		std::cout << "Test: " << i << std::endl;
-
-		all_time_ns += Test(shuffled_objects, preallocated_clusters, test_group, verbose);
-#ifdef TEST_STUFF 
-		std::cout << "cluster_in_obj_overwritten: " << TestStuff::cluster_in_obj_overwritten << std::endl;
-		TestStuff::cluster_in_obj_overwritten = 0;
-		std::cout << "max_num_data_chunks_used: " << TestStuff::max_num_data_chunks_used << std::endl;
-		std::cout << "max_num_clusters: " << TestStuff::max_num_clusters << std::endl;
-#endif //TEST_STUFF
-		std::cout << std::endl;
+		std::cout << std::endl << "Test: " << i << std::endl;
+		all_time_ns += Test(shuffled_objects, preallocated_clusters, verbose);
 	}
-	std::cout << "Average time [ms]: " << all_time_ns / repeat_test << std::endl;
-#ifdef TEST_STUFF 
-	std::cout << "objects_to_handle: " << TestStuff::max_num_objects_to_handle << std::endl;
-	TestStuff::cluster_in_obj_overwritten = 0;
-#endif //TEST_STUFF
+	std::cout << std::endl << "Average time [ms]: " << all_time_ns / repeat_test << std::endl;
+	IF_TEST_STUFF(std::cout << "max_num_data_chunks_used: " << TestStuff::max_num_data_chunks_used() << std::endl);
+	IF_TEST_STUFF(std::cout << "objects_to_handle: " << TestStuff::max_num_objects_to_handle() << std::endl);
 	getchar();
 }

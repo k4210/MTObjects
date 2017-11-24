@@ -1,28 +1,25 @@
 #pragma once
 
-#include <unordered_set>
 #include <algorithm>
 #include <ppl.h>
 #include "Utils.h"
 
 namespace MTObjects
 {
-using std::unordered_set;
 template<typename T> using FastContainer = SmartStack<T>;
-struct Cluster;
+using IndexSet = std::bitset<128>;
 
-struct IThreadSafeObject
+class IThreadSafeObject
 {
+	TIndex cluster_index_ = kNullIndex;
 public:
-	TIndex cluster_ = kNullIndex;
+	TIndex GetClusterIndex() const { return cluster_index_; }
+	void SetClusterIndex(TIndex index) { cluster_index_ = index; }
 
 	virtual void IsDependentOn(FastContainer<IThreadSafeObject*>& ref_dependencies) const = 0;
-	virtual void IsConstDependentOn(unordered_set<const Cluster*>& ref_dependencies, const vector<Cluster>& clusters) const = 0;
+	virtual void IsConstDependentOn(IndexSet& ref_dependencies) const = 0;
 
-	virtual void Task()
-	{
-		cluster_ = kNullIndex;
-	}
+	virtual void Task() = 0;
 };
 
 struct Cluster
@@ -31,19 +28,11 @@ private:
 	FastContainer<IThreadSafeObject*> objects_;
 
 public:
+	FastContainer<IThreadSafeObject*>& GetObjects() { return objects_; }
+	const FastContainer<IThreadSafeObject*>& GetObjects() const { return objects_; }
 	void Reset()
 	{
 		GetObjects().clear();
-	}
-
-	FastContainer<IThreadSafeObject*>& GetObjects()
-	{
-		return objects_;
-	}
-
-	const FastContainer<IThreadSafeObject*>& GetObjects() const
-	{
-		return objects_;
 	}
 
 public:
@@ -51,7 +40,6 @@ public:
 	~Cluster() = default;
 	Cluster(Cluster&& other) = default;
 	Cluster& operator=(Cluster&& other) = default;
-
 	Cluster(const Cluster&) = delete;
 	Cluster& operator=(const Cluster&) = delete;
 
@@ -61,7 +49,7 @@ public:
 		for(unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
 		{
 			IThreadSafeObject* const initial_object = all_objects[first_remaining_obj_index];
-			if(kNullIndex != initial_object->cluster_)
+			if(kNullIndex != initial_object->GetClusterIndex())
 				continue;
 
 			TIndex cluster_index = static_cast<TIndex>(clusters.size());
@@ -73,26 +61,25 @@ public:
 			{
 				IThreadSafeObject* obj = objects_to_handle.back();
 				objects_to_handle.pop_back();
-				if (kNullIndex == obj->cluster_)
+				const TIndex cluster_of_object = obj->GetClusterIndex();
+				if (kNullIndex == cluster_of_object)
 				{
 					actual_cluster->GetObjects().push_back(obj);
-					obj->cluster_ = cluster_index;
+					obj->SetClusterIndex(cluster_index);
 					obj->IsDependentOn(objects_to_handle);
+					IF_TEST_STUFF(TestStuff::max_num_objects_to_handle() = std::max(TestStuff::max_num_objects_to_handle(), objects_to_handle.size()));
 				}
-				else if (obj->cluster_ != cluster_index)
+				else if (cluster_of_object != cluster_index)
 				{
-					const TIndex other_cluster = obj->cluster_;
-					const bool use_new_cluster = clusters[other_cluster].GetObjects().size() > actual_cluster->GetObjects().size();
-					Cluster& to_merge = clusters[use_new_cluster ? cluster_index : other_cluster];
-					cluster_index = use_new_cluster ? other_cluster : cluster_index;
+					const bool use_new_cluster = clusters[cluster_of_object].GetObjects().size() > actual_cluster->GetObjects().size();
+					Cluster& to_merge = clusters[use_new_cluster ? cluster_index : cluster_of_object];
+					cluster_index = use_new_cluster ? cluster_of_object : cluster_index;
 					actual_cluster = &clusters[cluster_index];
-
 					for (auto object_merged : to_merge.GetObjects())
 					{
-						object_merged->cluster_ = cluster_index;
+						object_merged->SetClusterIndex(cluster_index);
 					}
 					ContainerFunc::Merge(actual_cluster->GetObjects(), to_merge.GetObjects());
-
 					if (&to_merge == initial_cluster)
 					{
 						clusters.pop_back();
@@ -102,10 +89,10 @@ public:
 		}
 	}
 
-	static vector<unordered_set<const Cluster*>> CreateClustersDependencies(vector<Cluster>& clusters)
+	static vector<IndexSet> CreateClustersDependencies(vector<Cluster>& clusters)
 	{
 		const auto num_clusters = clusters.size();
-		vector<unordered_set<const Cluster*>> const_dependencies_clusters;
+		vector<IndexSet> const_dependencies_clusters;
 		const_dependencies_clusters.resize(num_clusters);
 		
 		concurrency::parallel_for<size_t>(0, num_clusters, [&clusters, &const_dependencies_clusters](size_t idx)
@@ -114,10 +101,10 @@ public:
 			auto& const_dependency_set = const_dependencies_clusters[idx];
 			for (auto obj : cluster.GetObjects())
 			{
-				Assert(obj->cluster_ == idx);
-				obj->IsConstDependentOn(const_dependency_set, clusters);
+				Assert(obj->GetClusterIndex() == idx);
+				obj->IsConstDependentOn(const_dependency_set);
 			}
-			const_dependency_set.erase(&cluster);
+			const_dependency_set[idx] = false;
 		});
 
 		return const_dependencies_clusters;
@@ -133,13 +120,13 @@ public:
 			auto& objects = cluster.GetObjects();
 			for (auto obj : objects)
 			{
-				Assert(obj && obj->cluster_ == idx);
+				Assert(obj && obj->GetClusterIndex() == idx);
 
 				FastContainer<IThreadSafeObject*> dependencies;
 				obj->IsDependentOn(dependencies);
 				for (auto dep : dependencies)
 				{
-					Assert(dep && dep->cluster_ == idx);
+					Assert(dep && dep->GetClusterIndex() == idx);
 				}
 			}
 			vector<IThreadSafeObject*> objects_vec(objects.begin(), objects.end());
@@ -163,31 +150,23 @@ static_assert(sizeof(Cluster) == sizeof(FastContainer<IThreadSafeObject*>));
 struct GroupOfConcurrentClusters
 {
 	vector<Cluster*> clusters_;
-	unordered_set<const Cluster*> const_dependencies_clusters_;
+	IndexSet clusters_in_group_;
+	IndexSet const_dependencies_clusters_;
 
-	void AddCluster(Cluster& cluster, unordered_set<const Cluster*>& cluster_dependencies)
+	void AddCluster(Cluster& cluster, TIndex cluster_index, const IndexSet& cluster_dependencies)
 	{
 		clusters_.emplace_back(&cluster);
-		const_dependencies_clusters_.insert(cluster_dependencies.begin(), cluster_dependencies.end());
+		const_dependencies_clusters_ |= cluster_dependencies;
+		clusters_in_group_[cluster_index] = true;
 	}
 
-	static vector<GroupOfConcurrentClusters> GenerateClusterGroups(vector<Cluster>& clusters)
+public:
+	static vector<GroupOfConcurrentClusters> GenerateClusterGroups(vector<Cluster>& clusters, const vector<IndexSet>& dependency_sets)
 	{
-		auto fits_into_group = [&](const GroupOfConcurrentClusters& group, const Cluster* cluster, const unordered_set<const Cluster*>& cluster_dependencies) -> bool
-		{
-			return std::none_of(group.clusters_.begin(), group.clusters_.end(), [&](const Cluster* cluster_in_group)
-			{
-				return cluster_dependencies.end() != cluster_dependencies.find(cluster_in_group);
-			}) 
-			&& group.const_dependencies_clusters_.find(cluster) == group.const_dependencies_clusters_.end();
-		};
-
-		auto dependency_sets = Cluster::CreateClustersDependencies(clusters);
-
 		vector<GroupOfConcurrentClusters> groups;
 		groups.reserve(clusters.size()/4);
 		groups.resize(1); //groups.resize(std::max<size_t>(1, clusters.size() / 32));
-		for (int cluster_index = 0; cluster_index < clusters.size(); ++cluster_index)
+		for (TIndex cluster_index = 0; cluster_index < clusters.size(); ++cluster_index)
 		{
 			auto cluster = &clusters[cluster_index];
 			auto& dependency_set = dependency_sets[cluster_index];
@@ -199,9 +178,11 @@ struct GroupOfConcurrentClusters
 				{
 					const size_t group_idx = (first_group_to_try + groups_checked) % group_num;
 					auto& group = groups[group_idx];
-					if (fits_into_group(group, cluster, dependency_set))
+					const bool cluster_depends_on_group = (group.clusters_in_group_ & dependency_set).any();
+					const bool grup_depends_on_cluster = group.const_dependencies_clusters_[cluster_index];
+					if (!cluster_depends_on_group && !grup_depends_on_cluster)
 					{
-						group.AddCluster(*cluster, dependency_set);
+						group.AddCluster(*cluster, cluster_index, dependency_set);
 						fits_in_existing_group = true;
 					}
 				}
@@ -209,11 +190,24 @@ struct GroupOfConcurrentClusters
 			if (!fits_in_existing_group)
 			{
 				GroupOfConcurrentClusters new_group;
-				new_group.AddCluster(*cluster, dependency_set);
+				new_group.AddCluster(*cluster, cluster_index, dependency_set);
 				groups.emplace_back(new_group);
 			}
 		}
 		return groups;
+	}
+
+	void ExecuteGroup()
+	{
+		concurrency::parallel_for_each(clusters_.begin(), clusters_.end(), [](Cluster* cluster)
+		{
+			for (auto obj : cluster->GetObjects())
+			{
+				obj->Task();
+				obj->SetClusterIndex(kNullIndex);
+			}
+			cluster->Reset();
+		});
 	}
 };
 }

@@ -4,7 +4,6 @@
 #include <array>
 #include <bitset>
 #include <intrin.h> 
-#include <cstring>
 #include <algorithm>
 #include <vector>
 
@@ -29,16 +28,17 @@ namespace MTObjects
 #ifdef TEST_STUFF 
 	struct TestStuff
 	{
-		static unsigned int cluster_in_obj_overwritten;
-		static std::size_t max_num_objects_to_handle;
-		static std::size_t max_num_clusters;
-		static unsigned int max_num_data_chunks_used;
+		static unsigned int& max_num_objects_to_handle() { static unsigned int value = 0; return value; }
+		static unsigned int& max_num_data_chunks_used()  { static unsigned int value = 0; return value; }
 	};
+#define IF_TEST_STUFF(x) x
+#else
+#define IF_TEST_STUFF(x)
 #endif //TEST_STUFF
 
 	namespace SmartStackStuff
 	{
-		static const constexpr TIndex kDataChunkSize = 64 * 8; // == 16 * sizeof(int) == 8 * sizeof(*int)
+		static const constexpr TIndex kDataChunkSize = 64 * 8;
 		struct DataChunk
 		{
 			static const constexpr unsigned int kStoragePerChunk = kDataChunkSize - (2 * sizeof(DataChunk*));
@@ -51,9 +51,7 @@ namespace MTObjects
 			{
 				previous_chunk_ = nullptr;
 				next_chunk_ = nullptr;
-#ifdef TEST_STUFF 
-				std::memset(memory_, 0xEEEE, kStoragePerChunk);
-#endif //TEST_STUFF
+				IF_TEST_STUFF(std::memset(memory_, 0xEEEE, kStoragePerChunk));
 			}
 
 			unsigned char* GetMemory()
@@ -129,9 +127,7 @@ namespace MTObjects
 			std::array<DataChunk, kNumberChunks> chunks_;
 			std::array<std::bitset<kBitsetSize>, kRangeNum> is_element_occupied_;
 			ExtendedBitset is_range_occupied_;
-#ifdef TEST_STUFF 
-			unsigned int num_chunks_allocated = 0;
-#endif //TEST_STUFF
+			IF_TEST_STUFF(unsigned int num_chunks_allocated = 0);
 		public:
 			static DataChunkMemoryPool64 instance;
 
@@ -162,10 +158,8 @@ namespace MTObjects
 
 				is_range_occupied_.Set(first_range_with_free_space, range_bitset.all());
 
-#ifdef TEST_STUFF 
-				num_chunks_allocated++;
-				TestStuff::max_num_data_chunks_used = std::max<unsigned int>(TestStuff::max_num_data_chunks_used, num_chunks_allocated);
-#endif //TEST_STUFF
+				IF_TEST_STUFF(num_chunks_allocated++);
+				IF_TEST_STUFF(TestStuff::max_num_data_chunks_used() = std::max<unsigned int>(TestStuff::max_num_data_chunks_used(), num_chunks_allocated));
 
 				return first_range_with_free_space * kBitsetSize + bit_idx;
 			}
@@ -182,10 +176,7 @@ namespace MTObjects
 				range_bitset[bit_idx] = false;
 
 				is_range_occupied_.Set(range, false);
-
-#ifdef TEST_STUFF 
-				num_chunks_allocated--;
-#endif //TEST_STUFF
+				IF_TEST_STUFF(num_chunks_allocated--);
 			}
 
 			DataChunk* GetChunk(TIndex index)
@@ -319,9 +310,7 @@ namespace MTObjects
 			Assert(!empty());
 			number_of_elements_in_last_chunk_--;
 			(ElementsInLastChunk() + number_of_elements_in_last_chunk_)->~T();
-#ifdef TEST_STUFF 
-			std::memset((ElementsInLastChunk() + number_of_elements_in_last_chunk_), 0xEEEE, sizeof(T));
-#endif //TEST_STUFF
+			IF_TEST_STUFF(std::memset((ElementsInLastChunk() + number_of_elements_in_last_chunk_), 0xEEEE, sizeof(T)));
 			if (0 == number_of_elements_in_last_chunk_)
 			{
 				ReleaseLastChunk();
@@ -546,12 +535,10 @@ namespace MTObjects
 						{
 							src.ReleaseLastChunk();
 						}
-#ifdef TEST_STUFF 
 						else
 						{
-							std::memset(&src.ElementsInLastChunk()[remaining_elements_in_last_chunk_src], 0xEEEE, sizeof(T) * (kElementsPerChunk - remaining_elements_in_last_chunk_src));
+							IF_TEST_STUFF(std::memset(&src.ElementsInLastChunk()[remaining_elements_in_last_chunk_src], 0xEEEE, sizeof(T) * (kElementsPerChunk - remaining_elements_in_last_chunk_src)));
 						}
-#endif //TEST_STUFF
 					}
 				}
 				else
