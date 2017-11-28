@@ -12,6 +12,14 @@
 //#define TEST_STUFF
 #endif
 
+#define MT_CREATE_CLUSTER
+
+#ifdef MT_CREATE_CLUSTER
+#define IF_UNSAFE_MT(x) x	
+#else
+#define IF_UNSAFE_MT(x)
+#endif //MT_CREATE_CLUSTER
+
 #ifdef TEST_STUFF 
 #include <assert.h>
 #define Assert assert
@@ -129,7 +137,7 @@ namespace MTObjects
 			std::array<std::bitset<kBitsetSize>, kRangeNum> is_element_occupied_;
 			ExtendedBitset is_range_occupied_;
 			IF_TEST_STUFF(unsigned int num_chunks_allocated = 0);
-			std::mutex mutex_;
+			IF_UNSAFE_MT(std::mutex mutex_);
 		public:
 			static DataChunkMemoryPool64 instance;
 
@@ -148,7 +156,7 @@ namespace MTObjects
 
 			TIndex Allocate()
 			{
-				std::lock_guard<std::mutex> lock(mutex_);
+				IF_UNSAFE_MT(std::lock_guard<std::mutex> lock(mutex_));
 				IF_TEST_STUFF(Assert(num_chunks_allocated < kNumberChunks));
 
 				const auto first_range_with_free_space = is_range_occupied_.FirstZeroIndex();
@@ -171,7 +179,7 @@ namespace MTObjects
 
 			void Release(TIndex index)
 			{
-				std::lock_guard<std::mutex> lock(mutex_);
+				IF_UNSAFE_MT(std::lock_guard<std::mutex> lock(mutex_));
 				Assert(index >= 0 && index < kNumberChunks);
 
 				const auto range = index / kBitsetSize;
@@ -282,7 +290,7 @@ namespace MTObjects
 	public:
 		unsigned int size() const
 		{
-			return (number_chunks_ - 1) * kElementsPerChunk + number_of_elements_in_last_chunk_;
+			return ((int)number_chunks_ - 1) * kElementsPerChunk + number_of_elements_in_last_chunk_;
 		}
 
 		bool empty() const

@@ -145,7 +145,7 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 		std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
 
 		clusters.clear();
-		Cluster::CreateClustersMT(all_objects, clusters);
+		Cluster::CreateClusters(all_objects, clusters);
 
 		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
 		std::chrono::system_clock::duration duration = time_1 - time_0;
@@ -175,7 +175,7 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 	}
 
 	IF_TEST_STUFF(Cluster::Test_AreClustersCoherent(clusters));
-	/*
+
 	vector<IndexSet> dependency_sets;
 	{
 		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
@@ -232,7 +232,7 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 		ms += duration_ms;
 		std::cout << "Execution [ms]: " << duration_ms << std::endl;
 	}
-	*/
+
 	return ms;
 }
 

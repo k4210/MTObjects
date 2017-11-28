@@ -15,10 +15,10 @@ using IndexSet = std::bitset<128>;
 class IThreadSafeObject
 {
 public:
-#if 0
-	TIndex cluster_index_ = kNullIndex;
-#else
+#ifdef MT_CREATE_CLUSTER
 	std::atomic_ushort cluster_index_ = { kNullIndex };
+#else
+	TIndex cluster_index_ = kNullIndex;
 #endif
 
 	TIndex GetClusterIndex() const { return cluster_index_; }
@@ -48,17 +48,184 @@ public:
 	void Reset() { GetObjects().clear(); }
 #pragma endregion
 public:
+#ifdef MT_CREATE_CLUSTER
 	static void CreateClusters(const vector<IThreadSafeObject *> &all_objects, vector<Cluster>& clusters)
 	{
-		for(unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
+		struct ThreadData
+		{
+			std::mutex mutex;
+			FastContainer<IThreadSafeObject*> objects_to_handle;
+			FastContainer<IThreadSafeObject*> objects_to_store_in_cluster;
+			TIndex cluster_to_merge = { kNullIndex };
+			bool being_processed = false;
+		};
+
+		std::vector<ThreadData> cluster_threads(64 * 1024);
+		std::atomic_ushort init_value = { kNullIndex };
+		std::vector<std::atomic_ushort> redirections(64 * 1024, init_value);
+		std::atomic_ushort num_filled_clusters = 0;
+		std::atomic_uint first_remaining_obj_index = 0;
+		auto create_cluster = [&]() -> bool
+		{
+			unsigned short cluster_index = num_filled_clusters++;
+#pragma region handle initial object
+			{
+				const auto num_objects = all_objects.size();
+				TIndex loc_null_idx = kNullIndex;
+				unsigned int initial_obj_idx = 0;
+				ThreadData& context = cluster_threads[cluster_index];
+				std::lock_guard<std::mutex> lock(context.mutex);
+				Assert(!context.being_processed);
+				do {
+					initial_obj_idx = first_remaining_obj_index++;
+					if (initial_obj_idx >= num_objects)
+						return false;
+					loc_null_idx = kNullIndex;
+				} while (!all_objects[initial_obj_idx]->cluster_index_.compare_exchange_strong(loc_null_idx, cluster_index));
+				context.being_processed = true;
+				IThreadSafeObject* initial_obj = all_objects[initial_obj_idx];
+				context.objects_to_store_in_cluster.push_back(initial_obj);
+				initial_obj->IsDependentOn(context.objects_to_handle);
+			}
+#pragma endregion
+			while (true)
+			{
+				ThreadData& context = cluster_threads[cluster_index];
+				std::lock_guard<std::mutex> lock(context.mutex);
+				if (!context.being_processed)
+					return true;
+				//ASSIGN OBJECT
+				if (context.cluster_to_merge == kNullIndex)
+				{
+					if (context.objects_to_handle.empty())
+					{
+						context.being_processed = false;
+						return true;
+					}
+					Assert(context.redirected_index == kNullIndex);
+					IThreadSafeObject* obj = context.objects_to_handle.back();
+					Assert(obj);
+					TIndex other_cluster_index = kNullIndex;
+					const bool was_unassigned = obj->cluster_index_.compare_exchange_strong(other_cluster_index, cluster_index);
+					context.objects_to_handle.pop_back();
+					if (was_unassigned)
+					{
+						context.objects_to_store_in_cluster.push_back(obj);
+						obj->IsDependentOn(context.objects_to_handle);
+						continue; // handle next object
+					}
+					context.cluster_to_merge = other_cluster_index;
+				}
+				// MERGE CLUSTERS
+				Assert(kNullIndex != context.cluster_to_merge);
+				while (true)
+				{
+					{	//Resolve redirections
+						TIndex other_cluster_index = context.cluster_to_merge;
+						for (TIndex redirected = redirections[other_cluster_index]
+							; kNullIndex != redirected
+							; redirected = redirections[other_cluster_index])
+						{
+							other_cluster_index = redirected;
+						}
+						context.cluster_to_merge = other_cluster_index;
+					}
+					if (context.cluster_to_merge != cluster_index)
+					{
+						const auto other_cluster_index = context.cluster_to_merge;
+						ThreadData& other_cluster = cluster_threads[other_cluster_index];
+						if (!other_cluster.mutex.try_lock())
+						{
+							auto duration = std::chrono::duration<int, std::milli>::zero();
+							std::this_thread::sleep_for(duration);
+							break; // go outside of the locks scope
+						}
+						std::lock_guard<std::mutex> other_lock(other_cluster.mutex, std::adopt_lock);
+						if (kNullIndex != redirections[other_cluster_index])
+							continue; // resolve redirection again
+
+						context.cluster_to_merge = kNullIndex;
+						const bool other_cluster_survive = other_cluster_index < cluster_index;
+						{
+							ThreadData& to_merge = other_cluster_survive ? context : other_cluster;
+							ThreadData& to_survive = other_cluster_survive ? other_cluster : context;
+							redirections[other_cluster_survive ? cluster_index : other_cluster_index] = other_cluster_survive ? other_cluster_index : cluster_index;;
+							to_merge.being_processed = false;
+							ContainerFunc::Merge(to_survive.objects_to_store_in_cluster, to_merge.objects_to_store_in_cluster);
+							ContainerFunc::Merge(to_survive.objects_to_handle, to_merge.objects_to_handle);
+						}
+						if (!other_cluster_survive)
+						{
+							context.cluster_to_merge = other_cluster.cluster_to_merge;
+							other_cluster.cluster_to_merge = kNullIndex;
+						}
+						else if (!other_cluster.being_processed)
+						{
+							cluster_index = other_cluster_index;
+							other_cluster.being_processed = true;
+						}
+						else
+							return true;
+
+					}
+					else
+					{
+						context.cluster_to_merge = kNullIndex;
+					}
+					break;
+				}
+			}
+		};
+
+		//while (create_cluster());
+
+#pragma region run_parallelly
+		auto create_many_clusters = [&]()
+		{
+			while (create_cluster());
+		};
+		const unsigned int kNumConcurrentTasks = 8;
+		std::array<concurrency::task<void>, kNumConcurrentTasks> tasks;
+		for (int i = 0; i < kNumConcurrentTasks; i++)
+		{
+			tasks[i] = concurrency::create_task(create_many_clusters);
+		}
+		auto join_task = when_all(begin(tasks), end(tasks));
+		join_task.wait();
+#pragma endregion
+
+		const unsigned int num_clusters = num_filled_clusters;
+		for (unsigned int i = 0; i < num_clusters; i++)
+		{
+			auto& thread_data = cluster_threads[i];
+
+			Assert(!thread_data.being_processed);
+			Assert(thread_data.objects_to_handle.empty());
+			//Assert((thread_data.redirected_index != kNullIndex) == thread_data.objects_to_store_in_cluster.empty());
+			if (!thread_data.objects_to_store_in_cluster.empty())
+			{
+				const TIndex cluster_index = static_cast<TIndex>(clusters.size());
+				clusters.emplace_back();
+				for (auto object_merged : thread_data.objects_to_store_in_cluster)
+				{
+					object_merged->SetClusterIndex(cluster_index);
+				}
+				clusters.back().objects_ = std::move(thread_data.objects_to_store_in_cluster);
+			}
+		}
+	}
+#else
+	static void CreateClusters(const vector<IThreadSafeObject *> &all_objects, vector<Cluster>& clusters)
+	{
+		for (unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
 		{
 			IThreadSafeObject* const initial_object = all_objects[first_remaining_obj_index];
-			if(kNullIndex != initial_object->GetClusterIndex())
+			if (kNullIndex != initial_object->GetClusterIndex())
 				continue;
 
 			TIndex cluster_index = static_cast<TIndex>(clusters.size());
 			Cluster* const initial_cluster = &clusters.emplace_back();
-			IF_TEST_STUFF(TestStuff::max_num_clusters() = std::max(TestStuff::max_num_clusters(), static_cast<unsigned int>(clusters.size()) ));
+			IF_TEST_STUFF(TestStuff::max_num_clusters() = std::max(TestStuff::max_num_clusters(), static_cast<unsigned int>(clusters.size())));
 			Cluster* actual_cluster = initial_cluster;
 			FastContainer<IThreadSafeObject*> objects_to_handle;
 			objects_to_handle.push_back(initial_object);
@@ -93,156 +260,7 @@ public:
 			}
 		}
 	}
-
-	static void CreateClustersMT(const vector<IThreadSafeObject *> &all_objects, vector<Cluster>& clusters)
-	{
-		struct ThreadData
-		{
-			std::mutex mutex;
-			FastContainer<IThreadSafeObject*> objects_to_handle;
-			FastContainer<IThreadSafeObject*> objects_to_store_in_cluster;
-			std::atomic_ushort redirected_index = { kNullIndex }; //changed only once, no chains of redirection
-			bool being_processed = false;
-		}; 
-
-		std::vector<ThreadData> cluster_threads(64 * 1024);
-		std::atomic_ushort num_filled_clusters = 0;
-		std::atomic_uint first_remaining_obj_index = 0;
-		auto create_cluster = [&]() -> bool 
-		{
-			unsigned short cluster_index = num_filled_clusters++;
-			{
-				const auto num_objects = all_objects.size();
-				TIndex loc_null_idx = kNullIndex;
-				unsigned int initial_obj_idx = 0;
-				ThreadData& context = cluster_threads[cluster_index];
-				std::lock_guard<std::mutex> lock(context.mutex);
-				Assert(!context.being_processed);
-				do{
-					initial_obj_idx = first_remaining_obj_index++;
-					if (initial_obj_idx >= num_objects)
-						return false;
-					loc_null_idx = kNullIndex;
-				} while (!all_objects[initial_obj_idx]->cluster_index_.compare_exchange_strong(loc_null_idx, cluster_index));
-				context.being_processed = true;
-				IThreadSafeObject* initial_obj = all_objects[initial_obj_idx];
-				context.objects_to_store_in_cluster.push_back(initial_obj);
-				initial_obj->IsDependentOn(context.objects_to_handle);
-			}
-
-			while (true)
-			{
-				TIndex other_cluster_index = kNullIndex;
-				{
-					ThreadData& context = cluster_threads[cluster_index];
-					std::lock_guard<std::mutex> lock(context.mutex);
-					if (context.objects_to_handle.empty())
-					{
-						context.being_processed = false;
-						return true;
-					}
-					Assert(context.being_processed);
-					IThreadSafeObject* obj = context.objects_to_handle.back();
-					Assert(obj);
-					const bool was_unassigned = obj->cluster_index_.compare_exchange_strong(other_cluster_index, cluster_index);
-					if (was_unassigned)
-					{
-						context.objects_to_handle.pop_back();
-						context.objects_to_store_in_cluster.push_back(obj);
-						obj->IsDependentOn(context.objects_to_handle);
-						continue; // handle next object
-					}
-				}
-
-				while (true)
-				{
-					for (TIndex redirected = cluster_threads[other_cluster_index].redirected_index
-						; kNullIndex != redirected
-						; redirected = cluster_threads[other_cluster_index].redirected_index)
-					{
-						other_cluster_index = redirected;
-					}
-					if (other_cluster_index != cluster_index)
-					{
-						const bool use_other_cluster = other_cluster_index < cluster_index;
-						ThreadData& to_merge = cluster_threads[use_other_cluster ? cluster_index : use_other_cluster];
-						ThreadData& to_survive = cluster_threads[use_other_cluster ? use_other_cluster : cluster_index];
-						
-						std::lock_guard<std::mutex> lock_smaller(to_survive.mutex);
-						std::lock_guard<std::mutex> lock_bigger(to_merge.mutex);
-
-						if (kNullIndex != cluster_threads[other_cluster_index].redirected_index)
-							continue; //search further for final cluster
-
-						if (!cluster_threads[cluster_index].being_processed)
-							return true;
-						cluster_threads[cluster_index].objects_to_handle.pop_back(); // different obj ?
-
-						const auto survive_index = use_other_cluster ? other_cluster_index : cluster_index;
-						to_merge.redirected_index = survive_index;
-						to_merge.being_processed = false;
-						//for (auto object_merged : to_merge.objects_to_store_in_cluster)
-						//{
-						//	object_merged->SetClusterIndex(survive_index);
-						//}
-						ContainerFunc::Merge(to_survive.objects_to_store_in_cluster, to_merge.objects_to_store_in_cluster);
-						ContainerFunc::Merge(to_survive.objects_to_handle, to_merge.objects_to_handle);
-						if (use_other_cluster && !to_survive.being_processed)
-						{
-							cluster_index = other_cluster_index;
-							to_survive.being_processed = true;
-						}
-					}
-					else
-					{
-						ThreadData& context = cluster_threads[cluster_index];
-						std::lock_guard<std::mutex> lock(context.mutex);
-						if (!context.being_processed)
-							return true;
-						context.objects_to_handle.pop_back(); // different obj ?
-					}
-					break;
-				}
-			}
-		};
-
-		while (create_cluster());
-
-#pragma region run_parallelly
-		/*
-		auto create_many_clusters = [&]() 
-		{
-			while (create_cluster());
-		};
-		const unsigned int kNumConcurrentTasks = 8;
-		std::array<concurrency::task<void>, kNumConcurrentTasks> tasks;
-		for (int i = 0; i < kNumConcurrentTasks; i++)
-		{
-			tasks[i] = concurrency::create_task(create_many_clusters);
-		}
-		auto join_task = when_all(begin(tasks), end(tasks));
-		join_task.wait();
-		*/
-#pragma endregion
-
-		for (auto& thread_data : cluster_threads)
-		{
-			Assert(!thread_data.being_processed);
-			Assert(thread_data.objects_to_handle.empty());
-			Assert((thread_data.redirected_index != kNullIndex) == thread_data.objects_to_store_in_cluster.empty());
-			if (!thread_data.objects_to_store_in_cluster.empty())
-			{
-				const TIndex cluster_index = static_cast<TIndex>(clusters.size());
-				clusters.emplace_back();
-				for (auto object_merged : thread_data.objects_to_store_in_cluster)
-				{
-					object_merged->SetClusterIndex(cluster_index);
-				}
-				clusters.back().objects_ = std::move(thread_data.objects_to_store_in_cluster);
-			}
-		}
-	}
-
+#endif
 	static vector<IndexSet> CreateClustersDependencies(vector<Cluster>& clusters)
 	{
 		const auto num_clusters = clusters.size();
