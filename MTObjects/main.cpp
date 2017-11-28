@@ -40,15 +40,18 @@ public:
 	}
 };
 
-static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_num, int dependencies_num, int const_dependencies_num, std::default_random_engine& generator)
+static vector<TestObject*> GenerateObjects(int num_objects, int forced_clusters_num, int dependencies_num, int const_dependencies_num, std::default_random_engine& generator)
 {
 	std::cout << "Generating objects..." << std::endl;
 
-	vector<TestObject> vec_obj;
+	vector<TestObject*> vec_obj;
 	vector<vector<TestObject*>> forced_clusters;
 
-	vec_obj.clear();
 	vec_obj.resize(num_objects);
+	for (int i = 0; i < num_objects; i++)
+	{
+		vec_obj[i] = new TestObject();
+	}
 	const bool use_forced_clusters = forced_clusters_num > 1;
 	if (use_forced_clusters)
 	{
@@ -58,7 +61,7 @@ static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_n
 
 	for (int i = 0; i < num_objects; i++)
 	{
-		TestObject& obj = vec_obj[i];
+		TestObject& obj = *vec_obj[i];
 		obj.id_ = i;
 		if (use_forced_clusters)
 		{
@@ -102,13 +105,13 @@ static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_n
 			std::uniform_int_distribution<int> dependency_distribution(0, num_objects - 1);
 			for (int j = 0; j < dependencies_num; j++)
 			{
-				auto dep_obj = &vec_obj[dependency_distribution(generator)];
+				auto dep_obj = vec_obj[dependency_distribution(generator)];
 				obj.dependencies_.emplace_back(dep_obj);
 			}
 
 			for (int j = 0; j < const_dependencies_num; j++)
 			{
-				auto const_dep_obj = &vec_obj[dependency_distribution(generator)];
+				auto const_dep_obj = vec_obj[dependency_distribution(generator)];
 				obj.const_dependencies_.emplace_back(const_dep_obj);
 			}
 		}
@@ -119,13 +122,13 @@ static vector<TestObject> GenerateObjects(int num_objects, int forced_clusters_n
 	return vec_obj;
 }
 
-static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject>& vec_obj)
+static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject*>& vec_obj)
 {
 	vector<IThreadSafeObject*> all_objects;
 	all_objects.reserve(vec_obj.size());
 	for (unsigned int i = 0; i < vec_obj.size(); i++)
 	{
-		all_objects.emplace_back(&vec_obj[i]);
+		all_objects.emplace_back(vec_obj[i]);
 	}
 
 	std::mt19937 randomizer;
@@ -142,7 +145,7 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 		std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
 
 		clusters.clear();
-		Cluster::CreateClusters(all_objects, clusters);
+		Cluster::CreateClustersMT(all_objects, clusters);
 
 		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
 		std::chrono::system_clock::duration duration = time_1 - time_0;
@@ -172,7 +175,7 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 	}
 
 	IF_TEST_STUFF(Cluster::Test_AreClustersCoherent(clusters));
-
+	/*
 	vector<IndexSet> dependency_sets;
 	{
 		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
@@ -229,7 +232,7 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 		ms += duration_ms;
 		std::cout << "Execution [ms]: " << duration_ms << std::endl;
 	}
-
+	*/
 	return ms;
 }
 
@@ -274,7 +277,8 @@ void main()
 	auto objects = GenerateObjects(num_objects, forced_clusters, dependencies_num, const_dependencies_num, generator);
 	auto shuffled_objects = ShuffleObjects(objects);
 
-	vector<Cluster> preallocated_clusters(shuffled_objects.size() / 64);
+	vector<Cluster> preallocated_clusters;
+	preallocated_clusters.reserve(shuffled_objects.size() / 64);
 
 	long long all_time_ns = 0;
 	for (int i = 0; i < repeat_test; i++)
@@ -285,5 +289,6 @@ void main()
 	std::cout << std::endl << "Average time [ms]: " << all_time_ns / repeat_test << std::endl;
 	IF_TEST_STUFF(std::cout << "max_num_data_chunks_used: " << TestStuff::max_num_data_chunks_used() << std::endl);
 	IF_TEST_STUFF(std::cout << "objects_to_handle: " << TestStuff::max_num_objects_to_handle() << std::endl);
+	IF_TEST_STUFF(std::cout << "max_num_clusters: " << TestStuff::max_num_clusters() << std::endl);
 	getchar();
 }

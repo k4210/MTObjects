@@ -6,6 +6,7 @@
 #include <intrin.h> 
 #include <algorithm>
 #include <vector>
+#include <mutex>
 
 #ifndef TEST_STUFF
 //#define TEST_STUFF
@@ -14,8 +15,10 @@
 #ifdef TEST_STUFF 
 #include <assert.h>
 #define Assert assert
+#define IF_TEST_STUFF(x) x
 #else
 #define Assert(expression) ((void)0)
+#define IF_TEST_STUFF(x)
 #endif //TEST_STUFF
 
 namespace MTObjects
@@ -30,15 +33,13 @@ namespace MTObjects
 	{
 		static unsigned int& max_num_objects_to_handle() { static unsigned int value = 0; return value; }
 		static unsigned int& max_num_data_chunks_used()  { static unsigned int value = 0; return value; }
+		static unsigned int& max_num_clusters() { static unsigned int value = 0; return value; }
 	};
-#define IF_TEST_STUFF(x) x
-#else
-#define IF_TEST_STUFF(x)
 #endif //TEST_STUFF
 
 	namespace SmartStackStuff
 	{
-		static const constexpr TIndex kDataChunkSize = 64 * 8;
+		static const constexpr TIndex kDataChunkSize = 64 * 64;
 		struct DataChunk
 		{
 			static const constexpr unsigned int kStoragePerChunk = kDataChunkSize - (2 * sizeof(DataChunk*));
@@ -88,7 +89,7 @@ namespace MTObjects
 
 				TIndex FirstZeroIndex() const
 				{
-					unsigned long result = 0;
+					unsigned long result = kRangeNum + 1;
 					const bool ok = FirstZeroInBitset(bs_, result);
 					Assert(ok);
 					return static_cast<TIndex>(result);
@@ -128,6 +129,7 @@ namespace MTObjects
 			std::array<std::bitset<kBitsetSize>, kRangeNum> is_element_occupied_;
 			ExtendedBitset is_range_occupied_;
 			IF_TEST_STUFF(unsigned int num_chunks_allocated = 0);
+			std::mutex mutex_;
 		public:
 			static DataChunkMemoryPool64 instance;
 
@@ -146,6 +148,9 @@ namespace MTObjects
 
 			TIndex Allocate()
 			{
+				std::lock_guard<std::mutex> lock(mutex_);
+				IF_TEST_STUFF(Assert(num_chunks_allocated < kNumberChunks));
+
 				const auto first_range_with_free_space = is_range_occupied_.FirstZeroIndex();
 				Assert(first_range_with_free_space < kRangeNum);
 				auto& range_bitset = is_element_occupied_[first_range_with_free_space];
@@ -166,6 +171,7 @@ namespace MTObjects
 
 			void Release(TIndex index)
 			{
+				std::lock_guard<std::mutex> lock(mutex_);
 				Assert(index >= 0 && index < kNumberChunks);
 
 				const auto range = index / kBitsetSize;
