@@ -132,7 +132,7 @@ public:
 
 			while (true)
 			{
-				TIndex obj_cluster_index = kNullIndex;
+				TIndex other_cluster_index = kNullIndex;
 				{
 					ThreadData& context = cluster_threads[cluster_index];
 					std::lock_guard<std::mutex> lock(context.mutex);
@@ -144,18 +144,18 @@ public:
 					Assert(context.being_processed);
 					IThreadSafeObject* obj = context.objects_to_handle.back();
 					Assert(obj);
-					const bool was_unassigned = obj->cluster_index_.compare_exchange_strong(obj_cluster_index, cluster_index);
+					const bool was_unassigned = obj->cluster_index_.compare_exchange_strong(other_cluster_index, cluster_index);
 					if (was_unassigned)
 					{
 						context.objects_to_handle.pop_back();
 						context.objects_to_store_in_cluster.push_back(obj);
 						obj->IsDependentOn(context.objects_to_handle);
-						continue;
+						continue; // handle next object
 					}
 				}
 
+				while (true)
 				{
-					auto other_cluster_index = obj_cluster_index;
 					for (TIndex redirected = cluster_threads[other_cluster_index].redirected_index
 						; kNullIndex != redirected
 						; redirected = cluster_threads[other_cluster_index].redirected_index)
@@ -171,9 +171,12 @@ public:
 						std::lock_guard<std::mutex> lock_smaller(to_survive.mutex);
 						std::lock_guard<std::mutex> lock_bigger(to_merge.mutex);
 
+						if (kNullIndex != cluster_threads[other_cluster_index].redirected_index)
+							continue; //search further for final cluster
+
 						if (!cluster_threads[cluster_index].being_processed)
 							return true;
-						cluster_threads[cluster_index].objects_to_handle.pop_back();
+						cluster_threads[cluster_index].objects_to_handle.pop_back(); // different obj ?
 
 						const auto survive_index = use_other_cluster ? other_cluster_index : cluster_index;
 						to_merge.redirected_index = survive_index;
@@ -196,8 +199,9 @@ public:
 						std::lock_guard<std::mutex> lock(context.mutex);
 						if (!context.being_processed)
 							return true;
-						context.objects_to_handle.pop_back();
+						context.objects_to_handle.pop_back(); // different obj ?
 					}
+					break;
 				}
 			}
 		};
