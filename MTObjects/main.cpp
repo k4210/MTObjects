@@ -136,7 +136,7 @@ static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject*>& vec_obj)
 	return all_objects;
 }
 
-static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& clusters, bool verbose)
+static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& clusters, bool verbose, bool just_create)
 {
 	std::cout << std::endl;
 	long long ms = 0;
@@ -175,6 +175,9 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 	}
 
 	IF_TEST_STUFF(Cluster::Test_AreClustersCoherent(clusters));
+
+	if (just_create)
+		return ms;
 
 	vector<IndexSet> dependency_sets;
 	{
@@ -281,10 +284,13 @@ void main()
 	preallocated_clusters.reserve(shuffled_objects.size() / 64);
 
 	long long all_time_ns = 0;
+#ifndef TEST_STUFF
+	Test(shuffled_objects, preallocated_clusters, verbose, true); // to cache the stuff
+#endif // TEST_STUFF
 	for (int i = 0; i < repeat_test; i++)
 	{
 		std::cout << std::endl << "Test: " << i << std::endl;
-		all_time_ns += Test(shuffled_objects, preallocated_clusters, verbose);
+		all_time_ns += Test(shuffled_objects, preallocated_clusters, verbose, true);
 	}
 	std::cout << std::endl << "Average time [ms]: " << all_time_ns / repeat_test << std::endl;
 	IF_TEST_STUFF(std::cout << "max_num_data_chunks_used: " << TestStuff::max_num_data_chunks_used() << std::endl);

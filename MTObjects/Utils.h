@@ -12,7 +12,7 @@
 //#define TEST_STUFF
 #endif
 
-#define MT_CREATE_CLUSTER
+//#define MT_CREATE_CLUSTER
 
 #ifdef MT_CREATE_CLUSTER
 #define IF_UNSAFE_MT(x) x	
