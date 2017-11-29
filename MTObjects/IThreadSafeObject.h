@@ -257,6 +257,7 @@ public:
 					for (auto object_merged : to_merge.GetObjects())
 					{
 						object_merged->SetClusterIndex(cluster_index);
+						IF_TEST_STUFF(TestStuff::num_obj_cluster_overwritten() = TestStuff::num_obj_cluster_overwritten() + 1);
 					}
 					ContainerFunc::Merge(actual_cluster->GetObjects(), to_merge.GetObjects());
 					if (&to_merge == initial_cluster)

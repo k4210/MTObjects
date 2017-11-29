@@ -42,6 +42,7 @@ namespace MTObjects
 		static unsigned int& max_num_objects_to_handle() { static unsigned int value = 0; return value; }
 		static unsigned int& max_num_data_chunks_used()  { static unsigned int value = 0; return value; }
 		static unsigned int& max_num_clusters() { static unsigned int value = 0; return value; }
+		static unsigned __int64& num_obj_cluster_overwritten() { static unsigned __int64 value = 0; return value; }
 	};
 #endif //TEST_STUFF
 

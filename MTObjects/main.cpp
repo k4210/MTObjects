@@ -253,7 +253,7 @@ void main()
 	int repeat_test = 1;
 #else
 	bool verbose = false;
-	int repeat_test = 32;
+	int repeat_test = 128;
 #endif
 
 	if (read_user_input)
@@ -296,5 +296,6 @@ void main()
 	IF_TEST_STUFF(std::cout << "max_num_data_chunks_used: " << TestStuff::max_num_data_chunks_used() << std::endl);
 	IF_TEST_STUFF(std::cout << "objects_to_handle: " << TestStuff::max_num_objects_to_handle() << std::endl);
 	IF_TEST_STUFF(std::cout << "max_num_clusters: " << TestStuff::max_num_clusters() << std::endl);
+	IF_TEST_STUFF(std::cout << "num_obj_cluster_overwritten: " << TestStuff::num_obj_cluster_overwritten() << std::endl);
 	getchar();
 }
