@@ -15,6 +15,7 @@ class TestObject : public IThreadSafeObject
 public:
 	vector<TestObject*> dependencies_;
 	vector<const TestObject*> const_dependencies_;
+	mutable FastContainer<IThreadSafeObject*> cached_dependencies_;
 
 	int fake_data[31];
 
@@ -22,8 +23,8 @@ public:
 
 	void IsDependentOn(FastContainer<IThreadSafeObject*>& ref_dependencies) const override
 	{
-		ContainerFunc::Insert(ref_dependencies, dependencies_);
-		//ref_dependencies.Insert(dependencies_.begin(), dependencies_.end());
+		FastContainer<IThreadSafeObject*>::UnorderedMerge<false>(ref_dependencies, cached_dependencies_);
+		//ContainerFunc::Insert(ref_dependencies, dependencies_);
 	}
 
 	void IsConstDependentOn(IndexSet& ref_dependencies) const override
@@ -36,7 +37,7 @@ public:
 
 	void Task() override
 	{
-		
+		cached_dependencies_.Insert<vector<TestObject*>::iterator, true>(dependencies_.begin(), dependencies_.end());
 	}
 };
 
@@ -136,7 +137,7 @@ static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject*>& vec_obj)
 	return all_objects;
 }
 
-static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& clusters, bool verbose, bool just_create)
+static long long Test(const vector<IThreadSafeObject*>& all_objects, vector<Cluster>& clusters, bool verbose, bool just_create)
 {
 	std::cout << std::endl;
 	long long ms = 0;
@@ -145,7 +146,8 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 		std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
 
 		clusters.clear();
-		Cluster::CreateClusters(all_objects, clusters);
+		//Assert(SmartStackStuff::DataChunkMemoryPool64::instance.AllFree());
+		Cluster::CreateClustersOLD(all_objects, clusters);
 
 		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
 		std::chrono::system_clock::duration duration = time_1 - time_0;
@@ -174,7 +176,7 @@ static long long Test(vector<IThreadSafeObject*> all_objects, vector<Cluster>& c
 		}
 	}
 
-	IF_TEST_STUFF(Cluster::Test_AreClustersCoherent(clusters));
+	//IF_TEST_STUFF(Cluster::Test_AreClustersCoherent(clusters));
 
 	if (just_create)
 		return ms;
@@ -243,17 +245,17 @@ void main()
 {
 	const bool read_user_input = false;
 
-	int num_objects = 64 * 1024;
+	int num_objects = 62 * 1024;
 	int forced_clusters = 64;
 	int dependencies_num = 16;
 	int const_dependencies_num = 8;
 
 #ifdef TEST_STUFF 
 	bool verbose = true;
-	int repeat_test = 1;
+	int repeat_test = 256;
 #else
 	bool verbose = false;
-	int repeat_test = 128;
+	int repeat_test = 512;
 #endif
 
 	if (read_user_input)
@@ -284,18 +286,24 @@ void main()
 	preallocated_clusters.reserve(shuffled_objects.size() / 64);
 
 	long long all_time_ns = 0;
+	for (auto obj : shuffled_objects)
+	{
+		obj->Task();
+	}
 #ifndef TEST_STUFF
-	Test(shuffled_objects, preallocated_clusters, verbose, true); // to cache the stuff
+	Test(shuffled_objects, preallocated_clusters, verbose, false); // to cache the stuff
 #endif // TEST_STUFF
+	IF_TEST_STUFF(TestStuff::Reset());
 	for (int i = 0; i < repeat_test; i++)
 	{
 		std::cout << std::endl << "Test: " << i << std::endl;
-		all_time_ns += Test(shuffled_objects, preallocated_clusters, verbose, true);
+		all_time_ns += Test(shuffled_objects, preallocated_clusters, verbose, false);
 	}
 	std::cout << std::endl << "Average time [ms]: " << all_time_ns / repeat_test << std::endl;
 	IF_TEST_STUFF(std::cout << "max_num_data_chunks_used: " << TestStuff::max_num_data_chunks_used() << std::endl);
 	IF_TEST_STUFF(std::cout << "objects_to_handle: " << TestStuff::max_num_objects_to_handle() << std::endl);
 	IF_TEST_STUFF(std::cout << "max_num_clusters: " << TestStuff::max_num_clusters() << std::endl);
 	IF_TEST_STUFF(std::cout << "num_obj_cluster_overwritten: " << TestStuff::num_obj_cluster_overwritten() << std::endl);
+	IF_TEST_STUFF(std::cout << "max_objects_to_merge: " << TestStuff::max_objects_to_merge() << std::endl);
 	getchar();
 }

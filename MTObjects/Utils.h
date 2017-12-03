@@ -7,21 +7,13 @@
 #include <algorithm>
 #include <vector>
 #include <mutex>
+#include <assert.h>
 
 #ifndef TEST_STUFF
 //#define TEST_STUFF
 #endif
 
-//#define MT_CREATE_CLUSTER
-
-#ifdef MT_CREATE_CLUSTER
-#define IF_UNSAFE_MT(x) x	
-#else
-#define IF_UNSAFE_MT(x)
-#endif //MT_CREATE_CLUSTER
-
 #ifdef TEST_STUFF 
-#include <assert.h>
 #define Assert assert
 #define IF_TEST_STUFF(x) x
 #else
@@ -33,8 +25,8 @@ namespace MTObjects
 {
 	using std::vector;
 
-	typedef unsigned short TIndex;
-	static const constexpr TIndex kNullIndex = 0xFFFF;
+	typedef unsigned short TChunkIndex;
+	static const constexpr TChunkIndex kNullIndex = 0xFFFF;
 
 #ifdef TEST_STUFF 
 	struct TestStuff
@@ -43,15 +35,25 @@ namespace MTObjects
 		static unsigned int& max_num_data_chunks_used()  { static unsigned int value = 0; return value; }
 		static unsigned int& max_num_clusters() { static unsigned int value = 0; return value; }
 		static unsigned __int64& num_obj_cluster_overwritten() { static unsigned __int64 value = 0; return value; }
+		static unsigned int& max_objects_to_merge() { static unsigned int value = 0; return value; }
+
+		static void Reset()
+		{
+			max_num_objects_to_handle() = 0;
+			max_num_data_chunks_used() = 0;
+			max_num_clusters() = 0;
+			num_obj_cluster_overwritten() = 0;
+			max_objects_to_merge() = 0;
+		}
 	};
 #endif //TEST_STUFF
 
 	namespace SmartStackStuff
 	{
-		static const constexpr TIndex kDataChunkSize = 64 * 64;
+		static const constexpr int kDataChunkSize = 64 * 4;
 		struct DataChunk
 		{
-			static const constexpr unsigned int kStoragePerChunk = kDataChunkSize - (2 * sizeof(DataChunk*));
+			static const constexpr int kStoragePerChunk = kDataChunkSize - (2 * sizeof(DataChunk*));
 
 			DataChunk* previous_chunk_ = nullptr;
 			DataChunk* next_chunk_ = nullptr;
@@ -74,17 +76,18 @@ namespace MTObjects
 		struct DataChunkMemoryPool64
 		{
 			static const constexpr int kBitsetSize = 64; //size of range
-			static const constexpr int kRangeNum = 64;
+			static const constexpr int kBitsetsInFirstLevel = 16;
+			static const constexpr int kRangeNum = kBitsetSize * kBitsetsInFirstLevel;
 			static const constexpr int kNumberChunks = kBitsetSize * kRangeNum;
 
 			struct ExtendedBitset
 			{
-				std::bitset<kBitsetSize> bs_;
-
 				static bool FirstZeroInBitset(const std::bitset<kBitsetSize>& bitset, unsigned long& out_index)
 				{
 					return 0 != _BitScanForward64(&out_index, ~bitset.to_ullong());
 				}
+				/*
+				std::bitset<kBitsetSize> bs_;
 
 				bool Test(unsigned int i) const
 				{
@@ -96,49 +99,50 @@ namespace MTObjects
 					bs_[i] = value;
 				}
 
-				TIndex FirstZeroIndex() const
+				TChunkIndex FirstZeroIndex() const
 				{
 					unsigned long result = kRangeNum + 1;
 					const bool ok = FirstZeroInBitset(bs_, result);
 					Assert(ok);
-					return static_cast<TIndex>(result);
+					return static_cast<TChunkIndex>(result);
 				}
-				/*
+				*/
 
-								std::array<std::bitset<kBitsetSize>, 2> bitsets_;
+				std::array<std::bitset<kBitsetSize>, kBitsetsInFirstLevel> bitsets_;
 
-								unsigned int FirstZeroIndex() const
-								{
-									unsigned long result1 = 0;
-									const bool ok1 = FirstZeroInBitset(bitsets_[0], result1);
+				unsigned int FirstZeroIndex() const
+				{
+					for (int i = 0; i < kBitsetsInFirstLevel; i++)
+					{
+						unsigned long result = 0;
+						if (FirstZeroInBitset(bitsets_[i], result))
+						{
+							return result + kBitsetSize * i;
+						}
+					}
 
-									unsigned long result2 = 0;
-									const bool ok2 = FirstZeroInBitset(bitsets_[1], result2);
-									result2 += kBitsetSize;
+					Assert(false);
 
-									Assert(ok1 || ok2);
+					return 0xFFFFFFFF;
+				}
 
-									return ok1 ? result1 : result2;
-								}
+				bool Test(unsigned int i) const
+				{
+					return bitsets_[i / kBitsetSize][i % kBitsetSize];
+				}
 
-								bool Test(unsigned int i) const
-								{
-									return bitsets_[i / kBitsetSize][i % kBitsetSize];
-								}
-
-								void Set(unsigned int i, bool value)
-								{
-									bitsets_[i / kBitsetSize][i % kBitsetSize] = value;
-								}
-								*/
+				void Set(unsigned int i, bool value)
+				{
+					bitsets_[i / kBitsetSize][i % kBitsetSize] = value;
+				}
 			};
 
 		private:
 			std::array<DataChunk, kNumberChunks> chunks_;
 			std::array<std::bitset<kBitsetSize>, kRangeNum> is_element_occupied_;
-			ExtendedBitset is_range_occupied_;
+			ExtendedBitset is_range_fully_occupied_;
 			IF_TEST_STUFF(unsigned int num_chunks_allocated = 0);
-			IF_UNSAFE_MT(std::mutex mutex_);
+			std::mutex mutex_;
 		public:
 			static DataChunkMemoryPool64 instance;
 
@@ -147,61 +151,98 @@ namespace MTObjects
 			DataChunkMemoryPool64(DataChunkMemoryPool64&) = delete;
 			DataChunkMemoryPool64& operator=(DataChunkMemoryPool64&) = delete;
 
-			static TIndex FirstZeroInBitset(const std::bitset<kBitsetSize>& bitset)
+			bool AllFree() const
+			{
+				for (auto& bs : is_element_occupied_)
+				{
+					if (bs.any())
+						return false;
+				}
+				IF_TEST_STUFF(Assert(0 == num_chunks_allocated));
+				return true;
+			}
+
+			static TChunkIndex FirstZeroInBitset(const std::bitset<kBitsetSize>& bitset)
 			{
 				unsigned long result = 0xFFFFFFFF;
 				const bool ok = ExtendedBitset::FirstZeroInBitset(bitset, result);
 				Assert(ok);
-				return static_cast<TIndex>(result);
+				return static_cast<TChunkIndex>(result);
 			}
 
-			TIndex Allocate()
+			template<bool kThreadSafe> TChunkIndex Allocate()
 			{
-				IF_UNSAFE_MT(std::lock_guard<std::mutex> lock(mutex_));
-				IF_TEST_STUFF(Assert(num_chunks_allocated < kNumberChunks));
+				auto implementation = [&]()
+				{
+					IF_TEST_STUFF(Assert(num_chunks_allocated < kNumberChunks));
 
-				const auto first_range_with_free_space = is_range_occupied_.FirstZeroIndex();
-				Assert(first_range_with_free_space < kRangeNum);
-				auto& range_bitset = is_element_occupied_[first_range_with_free_space];
+					const auto first_range_with_free_space = is_range_fully_occupied_.FirstZeroIndex();
+					Assert(first_range_with_free_space < kRangeNum);
+					auto& range_bitset = is_element_occupied_[first_range_with_free_space];
 
-				Assert(!range_bitset.all());
-				const auto bit_idx = FirstZeroInBitset(range_bitset);
+					Assert(!range_bitset.all());
+					const auto bit_idx = FirstZeroInBitset(range_bitset);
 
-				Assert(!range_bitset[bit_idx]);
-				range_bitset[bit_idx] = true;
+					Assert(!range_bitset[bit_idx]);
+					range_bitset[bit_idx] = true;
 
-				is_range_occupied_.Set(first_range_with_free_space, range_bitset.all());
+					is_range_fully_occupied_.Set(first_range_with_free_space, range_bitset.all());
 
-				IF_TEST_STUFF(num_chunks_allocated++);
-				IF_TEST_STUFF(TestStuff::max_num_data_chunks_used() = std::max<unsigned int>(TestStuff::max_num_data_chunks_used(), num_chunks_allocated));
+					IF_TEST_STUFF(num_chunks_allocated++);
+					IF_TEST_STUFF(TestStuff::max_num_data_chunks_used() = std::max<unsigned int>(TestStuff::max_num_data_chunks_used(), num_chunks_allocated));
 
-				return first_range_with_free_space * kBitsetSize + bit_idx;
+					auto chunk_index = first_range_with_free_space * kBitsetSize + bit_idx;
+					Assert(chunk_index != kNullIndex);
+					return static_cast<TChunkIndex>(chunk_index);
+				};
+
+				if constexpr(kThreadSafe)
+				{
+					std::lock_guard<std::mutex> lock(mutex_);
+					return implementation();
+				}
+				else
+				{
+					return implementation();
+				}
 			}
 
-			void Release(TIndex index)
+			template<bool kThreadSafe> void Release(TChunkIndex index)
 			{
-				IF_UNSAFE_MT(std::lock_guard<std::mutex> lock(mutex_));
-				Assert(index >= 0 && index < kNumberChunks);
+				auto implementation = [&]()
+				{
+					Assert(index >= 0 && index < kNumberChunks);
 
-				const auto range = index / kBitsetSize;
-				const auto bit_idx = index % kBitsetSize;
+					const auto range = index / kBitsetSize;
+					const auto bit_idx = index % kBitsetSize;
 
-				auto& range_bitset = is_element_occupied_[range];
-				Assert(range_bitset[bit_idx]);
-				range_bitset[bit_idx] = false;
+					auto& range_bitset = is_element_occupied_[range];
+					Assert(range_bitset[bit_idx]);
+					range_bitset[bit_idx] = false;
 
-				is_range_occupied_.Set(range, false);
-				IF_TEST_STUFF(num_chunks_allocated--);
+					is_range_fully_occupied_.Set(range, false);
+					IF_TEST_STUFF(num_chunks_allocated--);
+				};
+
+				if constexpr(kThreadSafe)
+				{
+					std::lock_guard<std::mutex> lock(mutex_);
+					implementation();
+				}
+				else
+				{
+					implementation();
+				}
 			}
 
-			DataChunk* GetChunk(TIndex index)
+			DataChunk* GetChunk(TChunkIndex index)
 			{
 				return &chunks_[index];
 			}
 
-			TIndex GetIndex(const DataChunk* chunk) const
+			TChunkIndex GetIndex(const DataChunk* chunk) const
 			{
-				return static_cast<TIndex>(std::distance(&chunks_[0], chunk));
+				return static_cast<TChunkIndex>(std::distance(&chunks_[0], chunk));
 			}
 
 		};
@@ -218,25 +259,25 @@ namespace MTObjects
 		static_assert(SmartStackStuff::DataChunk::kStoragePerChunk >= sizeof(T), "too big T");
 		static const constexpr unsigned int kElementsPerChunk = SmartStackStuff::DataChunk::kStoragePerChunk / sizeof(T);
 
-		TIndex first_chunk_ = kNullIndex;
-		TIndex last_chunk_ = kNullIndex;
+		TChunkIndex first_chunk_ = kNullIndex;
+		TChunkIndex last_chunk_ = kNullIndex;
 		unsigned short number_chunks_ = 0;
 		unsigned short number_of_elements_in_last_chunk_ = kElementsPerChunk;
 
 	private:
-		static SmartStackStuff::DataChunk* GetPtr(TIndex index)
+		static SmartStackStuff::DataChunk* GetPtr(TChunkIndex index)
 		{
 			return (kNullIndex != index) ? SmartStackStuff::DataChunkMemoryPool64::instance.GetChunk(index) : nullptr;
 		}
 
-		static TIndex GetIndex(SmartStackStuff::DataChunk* chunk)
+		static TChunkIndex GetIndex(SmartStackStuff::DataChunk* chunk)
 		{
 			return (nullptr != chunk) ? SmartStackStuff::DataChunkMemoryPool64::instance.GetIndex(chunk) : kNullIndex;
 		}
 
-		void AllocateNextChunk()
+		template<bool kThreadSafe> void AllocateNextChunk()
 		{
-			auto new_chunk = SmartStackStuff::DataChunkMemoryPool64::instance.Allocate();
+			auto new_chunk = SmartStackStuff::DataChunkMemoryPool64::instance.Allocate<kThreadSafe>();
 			Assert(new_chunk != kNullIndex);
 			auto new_chunk_ptr = GetPtr(new_chunk);
 			new_chunk_ptr->Clear();
@@ -260,7 +301,7 @@ namespace MTObjects
 			}
 		}
 
-		void ReleaseLastChunk()
+		template<bool kThreadSafe> void ReleaseLastChunk()
 		{
 			auto chunk_to_release = last_chunk_;
 			Assert(kNullIndex != chunk_to_release);
@@ -268,7 +309,7 @@ namespace MTObjects
 			number_chunks_--;
 			Assert(0 == number_of_elements_in_last_chunk_);
 			number_of_elements_in_last_chunk_ = kElementsPerChunk;
-			SmartStackStuff::DataChunkMemoryPool64::instance.Release(chunk_to_release);
+			SmartStackStuff::DataChunkMemoryPool64::instance.Release<kThreadSafe>(chunk_to_release);
 
 			last_chunk_ = GetIndex(GetPtr(chunk_to_release)->previous_chunk_);
 			if (kNullIndex != last_chunk_)
@@ -310,17 +351,17 @@ namespace MTObjects
 			return ElementsInLastChunk()[number_of_elements_in_last_chunk_ - 1];
 		}
 
-		void push_back(const T& value)
+		template<bool kThreadSafe> void push_back(const T& value)
 		{
 			if (kElementsPerChunk == number_of_elements_in_last_chunk_)
 			{
-				AllocateNextChunk();
+				AllocateNextChunk<kThreadSafe>();
 			}
 			new (ElementsInLastChunk() + number_of_elements_in_last_chunk_) T(value);
 			number_of_elements_in_last_chunk_++;
 		}
 
-		void pop_back()
+		template<bool kThreadSafe> void pop_back()
 		{
 			Assert(!empty());
 			number_of_elements_in_last_chunk_--;
@@ -328,20 +369,25 @@ namespace MTObjects
 			IF_TEST_STUFF(std::memset((ElementsInLastChunk() + number_of_elements_in_last_chunk_), 0xEEEE, sizeof(T)));
 			if (0 == number_of_elements_in_last_chunk_)
 			{
-				ReleaseLastChunk();
+				ReleaseLastChunk<kThreadSafe>();
 			}
 		}
 
-		void clear()
+		template<bool kThreadSafe> void clear()
 		{
+			static_assert(std::is_pod<T>::value);
 			if constexpr (std::is_pod<T>::value)
 			{
+				IF_TEST_STUFF(int released_chunks = 0);
 				for (auto chunk_ptr = GetPtr(first_chunk_); chunk_ptr;)
 				{
 					auto temo_ptr = chunk_ptr;
 					chunk_ptr = chunk_ptr->next_chunk_;
-					SmartStackStuff::DataChunkMemoryPool64::instance.Release(GetIndex(temo_ptr));
+					Assert(nullptr == chunk_ptr || (chunk_ptr->previous_chunk_ == temo_ptr));
+					SmartStackStuff::DataChunkMemoryPool64::instance.Release<kThreadSafe>(GetIndex(temo_ptr));
+					IF_TEST_STUFF(released_chunks++);
 				}
+				IF_TEST_STUFF(Assert(number_chunks_ == released_chunks));
 				first_chunk_ = kNullIndex;
 				last_chunk_ = kNullIndex;
 				number_chunks_ = 0;
@@ -351,7 +397,7 @@ namespace MTObjects
 			{
 				while (number_chunks_)
 				{
-					pop_back();
+					pop_back<kThreadSafe>();
 				}
 				Assert(first_chunk_ == kNullIndex);
 				Assert(last_chunk_ == kNullIndex);
@@ -484,7 +530,7 @@ namespace MTObjects
 		SmartStack() = default;
 		~SmartStack()
 		{
-			clear();
+			clear<false>();
 		}
 
 		SmartStack(SmartStack&& other)
@@ -518,13 +564,26 @@ namespace MTObjects
 			}
 			return *this;
 		}
-
-
-		static void UnorderedMerge(SmartStack& dst, SmartStack& src)
+#ifdef TEST_STUFF 
+		void ValidateNumberOfChunks() const
 		{
+			int counter = 0;
+			for (auto chunk_ptr = GetPtr(first_chunk_); chunk_ptr; chunk_ptr = chunk_ptr->next_chunk_)
+			{
+				counter++;
+			}
+			Assert(number_chunks_ == counter);
+		}
+#endif
+		template<bool kThreadSafe> static void UnorderedMerge(SmartStack& dst, SmartStack& src)
+		{
+			IF_TEST_STUFF(src.ValidateNumberOfChunks());
+			IF_TEST_STUFF(dst.ValidateNumberOfChunks());
+
 			if (src.empty()) { return; }
 			if (dst.empty())
 			{
+				Assert(kNullIndex == dst.first_chunk_ && 0 == dst.number_chunks_);
 				// Move everything
 				dst.first_chunk_ = src.first_chunk_;
 				dst.last_chunk_ = src.last_chunk_;
@@ -536,6 +595,7 @@ namespace MTObjects
 				// Move some elements from last chunk
 				const unsigned short num_free_slots_in_last_chunk_dst = kElementsPerChunk - dst.number_of_elements_in_last_chunk_;
 				const auto num_elements_to_move = std::min(num_free_slots_in_last_chunk_dst, src.number_of_elements_in_last_chunk_);
+				static_assert(std::is_pod<T>::value);
 				if constexpr(std::is_pod<T>::value)
 				{
 					if (num_elements_to_move)
@@ -548,7 +608,7 @@ namespace MTObjects
 						src.number_of_elements_in_last_chunk_ -= num_elements_to_move;
 						if (0 == src.number_of_elements_in_last_chunk_)
 						{
-							src.ReleaseLastChunk();
+							src.ReleaseLastChunk<kThreadSafe>();
 						}
 						else
 						{
@@ -560,8 +620,8 @@ namespace MTObjects
 				{
 					for (int i = 0; i < num_elements_to_move; i++)
 					{
-						dst.push_back(src.back());
-						src.pop_back();
+						dst.push_back<kThreadSafe>(src.back());
+						src.pop_back<kThreadSafe>();
 					}
 				}
 
@@ -590,44 +650,18 @@ namespace MTObjects
 			src.last_chunk_ = kNullIndex;
 			src.number_chunks_ = 0;
 			src.number_of_elements_in_last_chunk_ = kElementsPerChunk;
+
+			IF_TEST_STUFF(src.ValidateNumberOfChunks());
+			IF_TEST_STUFF(dst.ValidateNumberOfChunks());
 		}
 
-		template<class It>
+		template<class It, bool kThreadSafe>
 		void Insert(It begin, It end)
 		{
 			for (; begin != end; ++begin)
 			{
-				push_back(*begin);
+				push_back<kThreadSafe>(*begin);
 			}
-		}
-	};
-
-	struct ContainerFunc
-	{
-		template<typename T, typename U>
-		static void Insert(SmartStack<T>& dst, const vector<U>& src)
-		{
-			dst.Insert(src.begin(), src.end());
-		}
-
-		template<typename T, typename U>
-		static void Insert(vector<T>& dst, const vector<U>& src)
-		{
-			dst.reserve(dst.size() + src.size());
-			dst.insert(dst.end(), src.begin(), src.end());
-		}
-
-		template<typename T, typename U>
-		static void Merge(SmartStack<T>& merge_to, SmartStack<U>& merge_from)
-		{
-			SmartStack<T>::UnorderedMerge(merge_to, merge_from);
-		}
-
-		template<typename T, typename U>
-		static void Merge(vector<T>& merge_to, vector<U>& merge_from)
-		{
-			Insert(merge_to, merge_from);
-			merge_from.clear();
 		}
 	};
 }
