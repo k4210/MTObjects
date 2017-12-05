@@ -50,7 +50,7 @@ namespace MTObjects
 
 	namespace SmartStackStuff
 	{
-		static const constexpr int kDataChunkSize = 64 * 4;
+		static const constexpr int kDataChunkSize = 64 * 8;
 		struct DataChunk
 		{
 			static const constexpr int kStoragePerChunk = kDataChunkSize - (2 * sizeof(DataChunk*));
@@ -395,13 +395,13 @@ namespace MTObjects
 			number_of_elements_in_last_chunk_++;
 		}
 
-		template<bool kThreadSafe> void pop_back()
+		template<bool kThreadSafe, bool kReleaseLastChunk = true> void pop_back()
 		{
 			Assert(!empty());
 			number_of_elements_in_last_chunk_--;
 			(ElementsInLastChunk() + number_of_elements_in_last_chunk_)->~T();
 			IF_TEST_STUFF(std::memset((ElementsInLastChunk() + number_of_elements_in_last_chunk_), 0xEEEE, sizeof(T)));
-			if (0 == number_of_elements_in_last_chunk_)
+			if ((0 == number_of_elements_in_last_chunk_) && (kReleaseLastChunk || number_chunks_ > 1))
 			{
 				ReleaseLastChunk<kThreadSafe>();
 			}
@@ -689,12 +689,20 @@ namespace MTObjects
 			IF_TEST_STUFF(dst.ValidateNumberOfChunks());
 		}
 
-		template<class It, bool kThreadSafe>
-		void Insert(It begin, It end)
+		void Insert(const vector<T>& v)
 		{
-			for (; begin != end; ++begin)
+			static_assert(std::is_pod<T>::value);
+			for(int remaining_elements = static_cast<int>(v.size()); remaining_elements > 0; )
 			{
-				push_back<kThreadSafe>(*begin);
+				if (kElementsPerChunk == number_of_elements_in_last_chunk_)
+					AllocateNextChunk<false>();
+
+				const auto num_free_slots_in_last_chunk = kElementsPerChunk - number_of_elements_in_last_chunk_;
+				const auto num_elements_to_move = std::min<int>(num_free_slots_in_last_chunk, remaining_elements);
+				Assert(num_elements_to_move > 0);
+				remaining_elements -= num_elements_to_move;
+				std::memcpy(&ElementsInLastChunk()[number_of_elements_in_last_chunk_], &v[remaining_elements], num_elements_to_move * sizeof(T));
+				number_of_elements_in_last_chunk_ += static_cast<unsigned short>(num_elements_to_move);
 			}
 		}
 	};

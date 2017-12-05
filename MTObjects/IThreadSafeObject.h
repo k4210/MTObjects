@@ -49,8 +49,9 @@ public:
 public:
 	static unsigned int CreateClusters(const vector<IThreadSafeObject *> &all_objects, ClusterArray& clusters)
 	{
+		const unsigned int num_objects = static_cast<unsigned int>(all_objects.size());
 		unsigned int num_clusters = 0;
-		for (unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
+		for (unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < num_objects; first_remaining_obj_index++)
 		{
 			IThreadSafeObject* const initial_object = all_objects[first_remaining_obj_index];
 			if (kNullIndex != initial_object->GetClusterIndex())
@@ -63,10 +64,10 @@ public:
 			Cluster* actual_cluster = initial_cluster;
 			FastContainer<IThreadSafeObject*> objects_to_handle;
 			objects_to_handle.push_back<false>(initial_object);
-			while (!objects_to_handle.empty())
+			do
 			{
 				IThreadSafeObject* obj = objects_to_handle.back();
-				objects_to_handle.pop_back<false>();
+				objects_to_handle.pop_back<false, false>();
 				const TClusterIndex cluster_of_object = obj->GetClusterIndex();
 				if (kNullIndex == cluster_of_object)
 				{
@@ -93,7 +94,7 @@ public:
 						num_clusters--;
 					}
 				}
-			}
+			} while (!objects_to_handle.empty());
 		}
 		return num_clusters;
 	}

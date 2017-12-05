@@ -16,13 +16,11 @@ public:
 	vector<TestObject*> dependencies_;
 	vector<const TestObject*> const_dependencies_;
 
-	int fake_data[31];
-
 	int id_ = -1;
 
 	void IsDependentOn(FastContainer<IThreadSafeObject*>& ref_dependencies) const override
 	{
-		ref_dependencies.Insert<vector<TestObject*>::const_iterator, false>(dependencies_.begin(), dependencies_.end());
+		ref_dependencies.Insert(*(vector<IThreadSafeObject*>*)&dependencies_);
 	}
 
 	void IsConstDependentOn(IndexSet& ref_dependencies) const override
@@ -35,22 +33,6 @@ public:
 
 	void Task() override
 	{
-	}
-};
-
-class TestObject_Experimental : public TestObject
-{
-public:
-	mutable FastContainer<IThreadSafeObject*> cached_dependencies_;
-
-	void IsDependentOn(FastContainer<IThreadSafeObject*>& ref_dependencies) const override
-	{
-		FastContainer<IThreadSafeObject*>::UnorderedMerge<false>(ref_dependencies, cached_dependencies_);
-	}
-
-	void Task() override
-	{
-		cached_dependencies_.Insert<vector<TestObject*>::iterator, true>(dependencies_.begin(), dependencies_.end());
 	}
 };
 
@@ -251,7 +233,7 @@ static long long Test(const vector<IThreadSafeObject*>& all_objects, ClusterArra
 
 void main()
 {
-	constexpr int num_objects = 62 * 1024;
+	constexpr int num_objects = 64 * 1024;
 	constexpr int forced_clusters = 64;
 	constexpr int dependencies_num = 16;
 	constexpr int const_dependencies_num = 8;
