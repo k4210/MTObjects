@@ -15,7 +15,6 @@ class TestObject : public IThreadSafeObject
 public:
 	vector<TestObject*> dependencies_;
 	vector<const TestObject*> const_dependencies_;
-	mutable FastContainer<IThreadSafeObject*> cached_dependencies_;
 
 	int fake_data[31];
 
@@ -23,8 +22,7 @@ public:
 
 	void IsDependentOn(FastContainer<IThreadSafeObject*>& ref_dependencies) const override
 	{
-		FastContainer<IThreadSafeObject*>::UnorderedMerge<false>(ref_dependencies, cached_dependencies_);
-		//ContainerFunc::Insert(ref_dependencies, dependencies_);
+		ref_dependencies.Insert<vector<TestObject*>::const_iterator, false>(dependencies_.begin(), dependencies_.end());
 	}
 
 	void IsConstDependentOn(IndexSet& ref_dependencies) const override
@@ -33,6 +31,21 @@ public:
 		{
 			ref_dependencies[obj->GetClusterIndex()] = true;
 		}
+	}
+
+	void Task() override
+	{
+	}
+};
+
+class TestObject_Experimental : public TestObject
+{
+public:
+	mutable FastContainer<IThreadSafeObject*> cached_dependencies_;
+
+	void IsDependentOn(FastContainer<IThreadSafeObject*>& ref_dependencies) const override
+	{
+		FastContainer<IThreadSafeObject*>::UnorderedMerge<false>(ref_dependencies, cached_dependencies_);
 	}
 
 	void Task() override
@@ -137,17 +150,15 @@ static vector<IThreadSafeObject*> ShuffleObjects(vector<TestObject*>& vec_obj)
 	return all_objects;
 }
 
-static long long Test(const vector<IThreadSafeObject*>& all_objects, vector<Cluster>& clusters, bool verbose, bool just_create)
+static long long Test(const vector<IThreadSafeObject*>& all_objects, ClusterArray& clusters, bool verbose)
 {
 	std::cout << std::endl;
 	long long ms = 0;
-
+	int num_clusters = 0;
 	{
 		std::chrono::system_clock::time_point time_0 = std::chrono::system_clock::now();
 
-		clusters.clear();
-		//Assert(SmartStackStuff::DataChunkMemoryPool64::instance.AllFree());
-		Cluster::CreateClustersOLD(all_objects, clusters);
+		num_clusters = Cluster::CreateClusters(all_objects, clusters);
 
 		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
 		std::chrono::system_clock::duration duration = time_1 - time_0;
@@ -176,16 +187,13 @@ static long long Test(const vector<IThreadSafeObject*>& all_objects, vector<Clus
 		}
 	}
 
-	//IF_TEST_STUFF(Cluster::Test_AreClustersCoherent(clusters));
-
-	if (just_create)
-		return ms;
+	IF_TEST_STUFF(Cluster::Test_AreClustersCoherent(clusters, num_clusters));
 
 	vector<IndexSet> dependency_sets;
 	{
 		std::chrono::system_clock::time_point time_1 = std::chrono::system_clock::now();
 
-		dependency_sets = Cluster::CreateClustersDependencies(clusters);
+		dependency_sets = Cluster::CreateClustersDependencies(clusters, num_clusters);
 
 		std::chrono::system_clock::time_point time_2 = std::chrono::system_clock::now();
 		std::chrono::system_clock::duration duration = time_2 - time_1;
@@ -243,61 +251,44 @@ static long long Test(const vector<IThreadSafeObject*>& all_objects, vector<Clus
 
 void main()
 {
-	const bool read_user_input = false;
-
-	int num_objects = 62 * 1024;
-	int forced_clusters = 64;
-	int dependencies_num = 16;
-	int const_dependencies_num = 8;
+	constexpr int num_objects = 62 * 1024;
+	constexpr int forced_clusters = 64;
+	constexpr int dependencies_num = 16;
+	constexpr int const_dependencies_num = 8;
 
 #ifdef TEST_STUFF 
 	bool verbose = true;
-	int repeat_test = 256;
+	int repeat_test = 1;
 #else
 	bool verbose = false;
-	int repeat_test = 512;
+	int repeat_test = 2048;
 #endif
 
-	if (read_user_input)
-	{
-		std::cout << "num_objects: ";
-		std::cin >> num_objects;
-		std::cout << "forced_clusters: ";
-		std::cin >> forced_clusters;
-		std::cout << "dependencies_num: ";
-		std::cin >> dependencies_num;
-		std::cout << "const_dependencies_num: ";
-		std::cin >> const_dependencies_num;
-	}
-	else
-	{
-		std::cout << "num_objects: " << num_objects << std::endl;
-		std::cout << "forced_clusters: " << forced_clusters << std::endl;
-		std::cout << "dependencies_num: " << dependencies_num << std::endl;
-		std::cout << "const_dependencies_num: " << const_dependencies_num << std::endl;
-	}
+	std::cout << "num_objects: " << num_objects << std::endl;
+	std::cout << "forced_clusters: " << forced_clusters << std::endl;
+	std::cout << "dependencies_num: " << dependencies_num << std::endl;
+	std::cout << "const_dependencies_num: " << const_dependencies_num << std::endl;
+
 	std::cout << std::endl;
 	
 	std::default_random_engine generator;
 	auto objects = GenerateObjects(num_objects, forced_clusters, dependencies_num, const_dependencies_num, generator);
 	auto shuffled_objects = ShuffleObjects(objects);
 
-	vector<Cluster> preallocated_clusters;
-	preallocated_clusters.reserve(shuffled_objects.size() / 64);
-
+	ClusterArray clusters;
 	long long all_time_ns = 0;
 	for (auto obj : shuffled_objects)
 	{
 		obj->Task();
 	}
 #ifndef TEST_STUFF
-	Test(shuffled_objects, preallocated_clusters, verbose, false); // to cache the stuff
+	Test(shuffled_objects, clusters, verbose); // to cache the stuff
 #endif // TEST_STUFF
 	IF_TEST_STUFF(TestStuff::Reset());
 	for (int i = 0; i < repeat_test; i++)
 	{
 		std::cout << std::endl << "Test: " << i << std::endl;
-		all_time_ns += Test(shuffled_objects, preallocated_clusters, verbose, false);
+		all_time_ns += Test(shuffled_objects, clusters, verbose);
 	}
 	std::cout << std::endl << "Average time [ms]: " << all_time_ns / repeat_test << std::endl;
 	IF_TEST_STUFF(std::cout << "max_num_data_chunks_used: " << TestStuff::max_num_data_chunks_used() << std::endl);

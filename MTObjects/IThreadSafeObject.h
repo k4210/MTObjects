@@ -13,8 +13,7 @@ namespace MTObjects
 typedef unsigned short TClusterIndex;
 
 template<typename T> using FastContainer = SmartStack<T>;
-using IndexSet = std::bitset<128>;
-
+using IndexSet = std::bitset<80>;
 class IThreadSafeObject
 {
 public:
@@ -31,6 +30,7 @@ public:
 
 struct Cluster
 {
+	using ClusterArray = std::array<Cluster, 80>;
 private:
 	FastContainer<IThreadSafeObject*> objects_;
 #pragma region default_stuff
@@ -47,17 +47,19 @@ public:
 	template<bool kThreadSafe> void Reset() { GetObjects().clear<kThreadSafe>(); }
 #pragma endregion
 public:
-	static void CreateClustersOLD(const vector<IThreadSafeObject *> &all_objects, vector<Cluster>& clusters)
+	static unsigned int CreateClusters(const vector<IThreadSafeObject *> &all_objects, ClusterArray& clusters)
 	{
+		unsigned int num_clusters = 0;
 		for (unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
 		{
 			IThreadSafeObject* const initial_object = all_objects[first_remaining_obj_index];
 			if (kNullIndex != initial_object->GetClusterIndex())
 				continue;
 
-			TClusterIndex cluster_index = static_cast<TClusterIndex>(clusters.size());
-			Cluster* const initial_cluster = &clusters.emplace_back();
-			IF_TEST_STUFF(TestStuff::max_num_clusters() = std::max(TestStuff::max_num_clusters(), static_cast<unsigned int>(clusters.size())));
+			TClusterIndex cluster_index = static_cast<TClusterIndex>(num_clusters);
+			Cluster* const initial_cluster = &clusters[num_clusters];
+			num_clusters++;
+			IF_TEST_STUFF(TestStuff::max_num_clusters() = std::max(TestStuff::max_num_clusters(), num_clusters));
 			Cluster* actual_cluster = initial_cluster;
 			FastContainer<IThreadSafeObject*> objects_to_handle;
 			objects_to_handle.push_back<false>(initial_object);
@@ -87,15 +89,18 @@ public:
 					FastContainer<IThreadSafeObject*>::UnorderedMerge<false>(actual_cluster->GetObjects(), to_merge.GetObjects());
 					if (&to_merge == initial_cluster)
 					{
-						clusters.pop_back();
+						to_merge.Reset<false>();
+						num_clusters--;
 					}
 				}
 			}
 		}
+		return num_clusters;
 	}
 
-	static void CreateClustersNEW(const vector<IThreadSafeObject *> &all_objects, vector<Cluster>& clusters)
+	static unsigned int CreateClusters_Experimental(const vector<IThreadSafeObject *> &all_objects, ClusterArray& clusters)
 	{
+		unsigned int num_clusters = 0;
 		for (unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < all_objects.size(); first_remaining_obj_index++)
 		{
 			FastContainer<IThreadSafeObject*> objects_to_handle;
@@ -105,10 +110,16 @@ public:
 					continue;
 				objects_to_handle.push_back<false>(initial_object);
 			}
-			const TClusterIndex initial_cluster_index = static_cast<TClusterIndex>(clusters.size());
+			const TClusterIndex initial_cluster_index = static_cast<TClusterIndex>(num_clusters);
 			FastContainer<IThreadSafeObject*> objects_from_merged_clusters;
-//#define LOCAL_MT
-#ifdef LOCAL_MT
+
+			IndexSet merged_clusters;
+			merged_clusters[initial_cluster_index] = true;
+			TClusterIndex cluster_index = initial_cluster_index;
+			Cluster* actual_cluster = &clusters[num_clusters];
+			num_clusters++;
+			IF_TEST_STUFF(TestStuff::max_num_clusters() = std::max(TestStuff::max_num_clusters(), num_clusters));
+
 			struct MergingRecord
 			{
 				TClusterIndex merge_dst = kNullIndex;
@@ -118,36 +129,25 @@ public:
 			std::atomic_bool main_thread_still_works = { true };
 			auto merge_clusters = [&]()
 			{
-				while (main_thread_still_works != false)
+				do
 				{
 					MergingRecord merging_task;
 					if (merging_tasks.try_pop(merging_task))
 					{
 						Cluster& to_merge = clusters[merging_task.merge_scr];
-						
-						//for (auto object_merged : to_merge.GetObjects())
-						//{
-						//	object_merged->SetClusterIndex(merging_task.merge_dst);
-						//	IF_TEST_STUFF(TestStuff::num_obj_cluster_overwritten() = TestStuff::num_obj_cluster_overwritten() + 1);
-						//}
-						
+
 						//we don't merge to clusters[merging_task.merge_dst].GetObjects(), since it can be used by another thread
-						ContainerFunc::Merge(objects_from_merged_clusters, to_merge.GetObjects());
+						FastContainer<IThreadSafeObject*>::UnorderedMerge<true>(objects_from_merged_clusters, to_merge.GetObjects());
 						if (merging_task.merge_scr == initial_cluster_index)
 						{
-							clusters.pop_back();
+							clusters[initial_cluster_index].Reset<true>();
+							num_clusters--;
 						}
 					}
-				}
+				} while (main_thread_still_works != false);
 			};
 			auto merging_thread = concurrency::create_task(merge_clusters);
-#endif //LOCAL_MT
 			
-			IndexSet merged_clusters;
-			merged_clusters[initial_cluster_index] = true;
-			TClusterIndex cluster_index = initial_cluster_index;
-			Cluster* actual_cluster = &clusters.emplace_back();
-			IF_TEST_STUFF(TestStuff::max_num_clusters() = std::max(TestStuff::max_num_clusters(), static_cast<unsigned int>(clusters.size())));
 			while (!objects_to_handle.empty())
 			{
 				IThreadSafeObject* obj = objects_to_handle.back();
@@ -167,39 +167,26 @@ public:
 					const auto to_merge_idx = use_new_cluster ? cluster_index : cluster_of_object;
 					cluster_index = use_new_cluster ? cluster_of_object : cluster_index;
 					actual_cluster = &clusters[cluster_index];
-#ifdef LOCAL_MT
 					merging_tasks.push({ cluster_index, to_merge_idx });
-#else
-					FastContainer<IThreadSafeObject*>::UnorderedMerge<false>(objects_from_merged_clusters, clusters[to_merge_idx].GetObjects());
-					if (to_merge_idx == initial_cluster_index)
-					{
-						clusters.pop_back();
-					}
-#endif
 				}
 			}
-#ifdef LOCAL_MT
 			main_thread_still_works = false;
 			merging_thread.wait();
-#endif
+
 			IF_TEST_STUFF(TestStuff::max_objects_to_merge() = std::max(TestStuff::max_objects_to_merge(), objects_from_merged_clusters.size()));
 			for (auto object_merged : objects_from_merged_clusters)
 			{
 				object_merged->SetClusterIndex(cluster_index);
 				IF_TEST_STUFF(TestStuff::num_obj_cluster_overwritten() = TestStuff::num_obj_cluster_overwritten() + 1);
 			}
-			
 			FastContainer<IThreadSafeObject*>::UnorderedMerge<false>(actual_cluster->GetObjects(), objects_from_merged_clusters);
-
 			Assert(objects_to_handle.empty());
 		}
+		return num_clusters;
 	}
-	static vector<IndexSet> CreateClustersDependencies(vector<Cluster>& clusters)
+	static vector<IndexSet> CreateClustersDependencies(const ClusterArray& clusters, int num_clusters)
 	{
-		const auto num_clusters = clusters.size();
-		vector<IndexSet> const_dependencies_clusters;
-		const_dependencies_clusters.resize(num_clusters);
-		
+		vector<IndexSet> const_dependencies_clusters(num_clusters);
 		concurrency::parallel_for<size_t>(0, num_clusters, [&clusters, &const_dependencies_clusters](size_t idx)
 		{
 			auto& cluster = clusters[idx];
@@ -216,10 +203,10 @@ public:
 	}
 
 #ifdef TEST_STUFF 
-	static bool Test_AreClustersCoherent(const vector<Cluster>& clusters)
+	static bool Test_AreClustersCoherent(const ClusterArray& clusters, int num_clusters)
 	{
 		// All dependencies of the objects must be inside the cluster
-		for (int idx = 0; idx < clusters.size(); idx++)
+		for (int idx = 0; idx < num_clusters; idx++)
 		{
 			auto& cluster = clusters[idx];
 			auto& objects = cluster.GetObjects();
@@ -250,6 +237,8 @@ public:
 #endif //TEST_STUFF
 };
 
+using ClusterArray = Cluster::ClusterArray;
+
 static_assert(sizeof(Cluster) == sizeof(FastContainer<IThreadSafeObject*>));
 
 struct GroupOfConcurrentClusters
@@ -266,12 +255,13 @@ struct GroupOfConcurrentClusters
 	}
 
 public:
-	static vector<GroupOfConcurrentClusters> GenerateClusterGroups(vector<Cluster>& clusters, const vector<IndexSet>& dependency_sets)
+	static vector<GroupOfConcurrentClusters> GenerateClusterGroups(ClusterArray& clusters, const vector<IndexSet>& dependency_sets)
 	{
 		vector<GroupOfConcurrentClusters> groups;
-		groups.reserve(clusters.size()/4);
+		const auto num_clusters = dependency_sets.size();
+		groups.reserve(num_clusters /4);
 		groups.resize(1); //groups.resize(std::max<size_t>(1, clusters.size() / 32));
-		for (TClusterIndex cluster_index = 0; cluster_index < clusters.size(); ++cluster_index)
+		for (TClusterIndex cluster_index = 0; cluster_index < num_clusters; ++cluster_index)
 		{
 			auto cluster = &clusters[cluster_index];
 			auto& dependency_set = dependency_sets[cluster_index];

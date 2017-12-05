@@ -73,10 +73,65 @@ namespace MTObjects
 		};
 		static_assert(sizeof(DataChunk) == kDataChunkSize);
 
+		struct DataChunkMemoryPool64_Experimental
+		{
+			static const constexpr int kNumberChunks = 64 * 1024 - 2;
+
+		private:
+			std::array<DataChunk, kNumberChunks> chunks_;
+			concurrency::concurrent_queue<TChunkIndex> unallocated_chunks;
+			IF_TEST_STUFF(unsigned int num_chunks_allocated = 0);
+		public:
+			static DataChunkMemoryPool64_Experimental instance;
+
+			DataChunkMemoryPool64_Experimental()
+			{
+				for (TChunkIndex i = 0; i < kNumberChunks; i++)
+				{
+					unallocated_chunks.push(i);
+				}
+			}
+			~DataChunkMemoryPool64_Experimental() = default;
+			DataChunkMemoryPool64_Experimental(DataChunkMemoryPool64_Experimental&) = delete;
+			DataChunkMemoryPool64_Experimental& operator=(DataChunkMemoryPool64_Experimental&) = delete;
+
+			bool AllFree() const
+			{
+				IF_TEST_STUFF(Assert(kNumberChunks - unallocated_chunks.unsafe_size() == num_chunks_allocated));
+				return unallocated_chunks.unsafe_size() == kNumberChunks;
+			}
+
+			template<bool kThreadSafe> TChunkIndex Allocate()
+			{
+				TChunkIndex index = kNullIndex;
+				const bool ok = unallocated_chunks.try_pop(index);
+				Assert(ok);
+				IF_TEST_STUFF(num_chunks_allocated++);
+				IF_TEST_STUFF(TestStuff::max_num_data_chunks_used() = std::max<unsigned int>(TestStuff::max_num_data_chunks_used(), num_chunks_allocated));
+				return index;
+			}
+
+			template<bool kThreadSafe> void Release(TChunkIndex index)
+			{
+				unallocated_chunks.push(index);
+				IF_TEST_STUFF(num_chunks_allocated--);
+			}
+
+			DataChunk* GetChunk(TChunkIndex index)
+			{
+				return &chunks_[index];
+			}
+
+			TChunkIndex GetIndex(const DataChunk* chunk) const
+			{
+				return static_cast<TChunkIndex>(std::distance(&chunks_[0], chunk));
+			}
+		};
+
 		struct DataChunkMemoryPool64
 		{
 			static const constexpr int kBitsetSize = 64; //size of range
-			static const constexpr int kBitsetsInFirstLevel = 16;
+			static const constexpr int kBitsetsInFirstLevel = 1;
 			static const constexpr int kRangeNum = kBitsetSize * kBitsetsInFirstLevel;
 			static const constexpr int kNumberChunks = kBitsetSize * kRangeNum;
 
@@ -86,27 +141,6 @@ namespace MTObjects
 				{
 					return 0 != _BitScanForward64(&out_index, ~bitset.to_ullong());
 				}
-				/*
-				std::bitset<kBitsetSize> bs_;
-
-				bool Test(unsigned int i) const
-				{
-					return bs_[i];
-				}
-
-				void Set(unsigned int i, bool value)
-				{
-					bs_[i] = value;
-				}
-
-				TChunkIndex FirstZeroIndex() const
-				{
-					unsigned long result = kRangeNum + 1;
-					const bool ok = FirstZeroInBitset(bs_, result);
-					Assert(ok);
-					return static_cast<TChunkIndex>(result);
-				}
-				*/
 
 				std::array<std::bitset<kBitsetSize>, kBitsetsInFirstLevel> bitsets_;
 
