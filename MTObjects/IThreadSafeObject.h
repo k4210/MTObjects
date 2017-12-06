@@ -51,6 +51,7 @@ public:
 	{
 		const unsigned int num_objects = static_cast<unsigned int>(all_objects.size());
 		unsigned int num_clusters = 0;
+		FastContainer<IThreadSafeObject*> objects_to_handle;
 		for (unsigned int first_remaining_obj_index = 0; first_remaining_obj_index < num_objects; first_remaining_obj_index++)
 		{
 			IThreadSafeObject* const initial_object = all_objects[first_remaining_obj_index];
@@ -62,7 +63,6 @@ public:
 			num_clusters++;
 			IF_TEST_STUFF(TestStuff::max_num_clusters() = std::max(TestStuff::max_num_clusters(), num_clusters));
 			Cluster* actual_cluster = initial_cluster;
-			FastContainer<IThreadSafeObject*> objects_to_handle;
 			objects_to_handle.push_back<false>(initial_object);
 			do
 			{
@@ -88,13 +88,10 @@ public:
 						IF_TEST_STUFF(TestStuff::num_obj_cluster_overwritten() = TestStuff::num_obj_cluster_overwritten() + 1);
 					}
 					FastContainer<IThreadSafeObject*>::UnorderedMerge<false>(actual_cluster->GetObjects(), to_merge.GetObjects());
-					if (&to_merge == initial_cluster)
-					{
-						to_merge.Reset<false>();
-						num_clusters--;
-					}
 				}
 			} while (!objects_to_handle.empty());
+			if (initial_cluster->GetObjects().empty())
+				num_clusters--;
 		}
 		return num_clusters;
 	}
